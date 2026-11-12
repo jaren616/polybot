@@ -1,0 +1,235 @@
+"""Offline tests for the whole bot. No internet, no keys, no money.
+Run:  py test_all.py   -> should end with ALL TESTS PASSED"""
+import json
+import os
+import sys
+import threading
+import time
+import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import config
+
+config.DB_PATH = ":memory:"
+config.ANTHROPIC_API_KEY = "test"
+import ai
+import broker as broker_mod
+import data
+import dashboard
+import news_feeds
+import strategies
+from broker import Broker, LiveTrader, kelly_stake
+from db import DB
+from engine import Engine
+
+ok = 0
+
+
+def check(cond, msg):
+    global ok
+    assert cond, msg
+    ok += 1
+
+
+def mk(id, q, bid, ask, closed=False, final=None, liq=50_000):
+    prices = [str(final), str(1 - final)] if closed else [str((bid + ask) / 2), str(1 - (bid + ask) / 2)]
+    return data.parse_market({
+        "id": id, "question": q, "slug": f"s{id}", "outcomes": json.dumps(["Yes", "No"]),
+        "outcomePrices": json.dumps(prices), "bestBid": bid, "bestAsk": ask, "liquidityNum": liq,
+        "volume24hr": 1000, "endDate": "2026-12-31", "closed": closed,
+        "clobTokenIds": json.dumps([f"y{id}", f"n{id}"]), "orderMinSize": 5})
+
+
+# ---------------- 1. Kelly sizing ----------------
+check(kelly_stake(0.6, "YES", 0.5, 1000) == 10.0, "kelly capped at MAX_STAKE")       # 0.25*0.2*1000=50 -> cap 10
+check(abs(kelly_stake(0.52, "YES", 0.5, 100) - 1.0) < 1e-9, "small kelly")            # 0.25*0.04*100 = 1.0
+check(kelly_stake(0.45, "YES", 0.5, 1000) == 0.0, "no bet without edge")
+check(kelly_stake(0.2, "NO", 0.6, 1000) == 10.0, "NO side: q=0.8 vs price 0.6")
+check(kelly_stake(0.51, "YES", 0.5, 100) == 0.0, "below MIN_STAKE -> 0")
+
+# ---------------- 2. Broker + risk ----------------
+db = DB(":memory:")
+b = Broker(db)
+m1 = mk(1, "Will the Bank of England cut interest rates in December 2026?", 0.39, 0.41)
+pid = b.buy(m1, "YES", 0.65, "news")
+check(pid is not None, "paper buy works")
+p = db.open_positions()[0]
+check(abs(p["price"] - 0.41) < 1e-9 and p["side"] == "YES" and p["cost"] <= config.MAX_STAKE, "buy at ask, capped")
+check(b.buy(m1, "YES", 0.65, "news") is None, "no second position in same market")
+check(b.buy(mk(2, "x", 0.99, 0.995), "YES", 0.999, "news") is None, "refuse price above MAX_PRICE")
+sid = db.add_signal("news", "t", "d")
+b.buy(mk(3, "y", 0.30, 0.32), "NO", 0.10, "news", signal_id=sid)
+p3 = [p for p in db.open_positions() if p["market_id"] == "3"][0]
+check(p3["side"] == "NO" and abs(p3["price"] - 0.70) < 1e-9, "NO bought at 1 - bid")
+check("paper buy NO" in db.q("SELECT action FROM signals WHERE id=?", (sid,))[0]["action"], "signal records action")
+db.set("paused", True)
+check(b.buy(mk(4, "z", 0.30, 0.32), "YES", 0.6, "news") is None, "paused blocks trades")
+db.set("paused", False)
+old = config.MAX_TRADES_PER_DAY
+config.MAX_TRADES_PER_DAY = 2
+check(b.buy(mk(5, "w", 0.30, 0.32), "YES", 0.6, "news") is None, "max trades/day")
+config.MAX_TRADES_PER_DAY = old
+
+# ---------------- 3. Marking + settlement P&L ----------------
+markets = {"1": mk(1, m1.question, 0.0, 0.0, closed=True, final=1.0),
+           "3": mk(3, "y", 0.50, 0.52)}
+strategies.mark_positions(db, get=lambda i: markets.get(i))
+p3 = [p for p in db.open_positions() if p["market_id"] == "3"][0]
+check(abs(p3["mark"] - 0.49) < 1e-9, "NO marked at 1 - mid")
+n = strategies.settle_positions(db, get=lambda i: markets.get(i))
+closed = db.q("SELECT * FROM positions WHERE status='closed'")
+check(n == 1 and abs(closed[0]["pnl"] - (closed[0]["shares"] - closed[0]["cost"])) < 1e-9, "YES win pays shares - cost")
+money = db.money()
+check(abs(money["equity"] - (config.BANKROLL + money["realized"] + money["open_value"] - money["open_cost"])) < 1e-9, "equity identity")
+
+# ---------------- 4. Daily loss limit auto-pause ----------------
+db2 = DB(":memory:")
+b2 = Broker(db2)
+db2.x("INSERT INTO equity VALUES (?,?,?,?,?)", (time.time() - 60, 1000, 1000, 0, 0))
+db2.add_position(ts=time.time(), mode="paper", strategy="t", market_id="L", question="loser", url="", side="YES",
+                 token_id="", price=0.5, shares=200, cost=100, est_prob=0.6, market_yes=0.5, mark=0.5)
+db2.close_position(1, 0.0)  # lose $100
+check(b2.buy(mk(9, "q", 0.4, 0.42), "YES", 0.7, "news") is None and db2.paused(), "daily loss limit pauses bot")
+
+# ---------------- 5. News strategy end-to-end ----------------
+db3 = DB(":memory:")
+b3 = Broker(db3)
+ns = strategies.NewsStrategy(db3, b3)
+mk_boe = mk(11, "Will the Bank of England cut interest rates in December 2026?", 0.39, 0.41)
+data.load_active_markets = lambda n=None: [mk_boe, mk(12, "Will Arsenal win the Premier League?", 0.3, 0.32)]
+data.get_market = lambda i: mk_boe if i == "11" else None
+ai.judge = lambda item, m, age: ai.Judgement(True, 0.65, 0.8, False, "strong signal")
+items = [news_feeds.NewsItem("a", "BBC", "Bank of England governor signals interest rate cut is imminent", "u", time.time() - 60),
+         news_feeds.NewsItem("b", "BBC", "Rain expected tomorrow", "u", time.time() - 60),
+         news_feeds.NewsItem("c", "BBC", "Bank of England rates old story", "u", time.time() - 7200)]
+check(ns.run(items) == 1, "one relevant fresh item -> one signal")
+check(ns.run(items) == 0, "dedupe on second pass")
+check(len(db3.open_positions()) == 1 and db3.open_positions()[0]["strategy"] == "news", "news trade placed")
+ai.judge = lambda item, m, age: ai.Judgement(True, 0.42, 0.9, True, "priced in")
+ns.run([news_feeds.NewsItem("d", "BBC", "Bank of England interest rate cut talk continues", "u", time.time())])
+check("already priced in" in db3.q("SELECT action FROM signals ORDER BY id DESC LIMIT 1")[0]["action"], "priced-in recorded")
+
+# ---------------- 6. Arbitrage + movers ----------------
+def ev_mk(id, q, bid, ask, title=None, vol=100, liq=1000, end="2026-12-31"):
+    return {"id": id, "question": q, "groupItemTitle": title, "outcomes": json.dumps(["Yes", "No"]),
+            "clobTokenIds": json.dumps([f"t{id}", f"n{id}"]), "bestBid": bid, "bestAsk": ask,
+            "endDate": end + "T00:00:00Z", "volume24hr": vol, "liquidityNum": liq, "slug": f"m{id}",
+            "active": True, "closed": False}
+events = [{"id": "e1", "title": "Who wins Tiny Town?", "negRisk": True, "slug": "tiny", "endDate": "2026-12-31",
+           "markets": [ev_mk(1, "Ann?", 0.50, 0.52, "Ann"), ev_mk(2, "Bob?", 0.35, 0.37, "Bob"),
+                       ev_mk(3, "Cat?", 0.20, 0.22, "Cat")]},
+          {"id": "e2", "title": "Mover", "slug": "mv", "markets": [ev_mk(50, "Will X happen?", 0.40, 0.42, liq=5000)]}]
+book = lambda t: {"bid": 0.5 if t == "t1" else 0.35 if t == "t2" else 0.2, "bid_size": 200,
+                  "ask": 0.52, "ask_size": 150} if t in ("t1", "t2", "t3") else None
+db4 = DB(":memory:")
+scan = strategies.SlowScan(db4)
+now = time.time()
+strategies.detect_movers(db4, [], now - 3600)  # empty history baseline is fine
+found = scan.run(events, book)
+check(len(found) == 1 and found[0]["type"] == "SUM-NO", "arb found")
+check(db4.q("SELECT COUNT(*) n FROM signals WHERE kind='arb'")[0]["n"] == 1, "arb signal once")
+scan.run(events, book)
+check(db4.q("SELECT COUNT(*) n FROM signals WHERE kind='arb'")[0]["n"] == 1, "no duplicate arb signal")
+check(db4.q("SELECT scans FROM arbs")[0]["scans"] == 2, "arb tracked across scans")
+# movers: price 0.41 an hour ago -> 0.61 now
+db5 = DB(":memory:")
+leg = lambda bid, ask, vol=1000: [{"id": "50", "question": "Will X happen?", "slug": "mv", "bid": bid, "ask": ask,
+                                    "vol24": vol, "liq": 5000}]
+strategies.detect_movers(db5, leg(0.40, 0.42), now - 3700)
+check(strategies.detect_movers(db5, leg(0.60, 0.62, 20000), now) == 1, "mover detected")
+check("price up 20 points" in db5.q("SELECT detail FROM signals")[0]["detail"], "mover detail")
+check(strategies.detect_movers(db5, leg(0.80, 0.82), now + 60) == 0, "mover cooldown")
+
+# ---------------- 7. Live mode refuses without setup ----------------
+config.MODE = "live"
+try:
+    LiveTrader(DB(":memory:"))
+    check(False, "live should refuse")
+except RuntimeError as e:
+    check("POLY_PRIVATE_KEY" in str(e) and "POLYBOT_LIVE_CONFIRM" in str(e), "live refuses with clear reasons")
+config.MODE = "paper"
+# live blocked by geoblock even with everything set
+config.MODE, config.POLY_PRIVATE_KEY, config.POLY_FUNDER = "live", "0xabc", "0xdef"
+os.environ["POLYBOT_LIVE_CONFIRM"] = config.LIVE_CONFIRM_PHRASE
+data.geoblock = lambda: {"blocked": True, "country": "GB"}
+try:
+    LiveTrader(DB(":memory:"))
+    check(False, "geoblocked should refuse")
+except RuntimeError as e:
+    check("blocked" in str(e), "geoblock respected")
+config.MODE, config.POLY_PRIVATE_KEY, config.POLY_FUNDER = "paper", None, None
+os.environ.pop("POLYBOT_LIVE_CONFIRM")
+
+# ---------------- 8. Dashboard API ----------------
+srv = dashboard.serve(db3, port=0)
+port = srv.server_address[1]
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+st = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state").read())
+check(st["mode"] in ("paper", "live") and len(st["open"]) == 1 and len(st["signals"]) >= 2, "state API")
+html = urllib.request.urlopen(f"http://127.0.0.1:{port}/").read().decode()
+check("<title>Polybot Dashboard</title>" in html, "dashboard page")
+urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/api/pause", method="POST"))
+check(db3.paused(), "pause button")
+urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/api/resume", method="POST"))
+check(not db3.paused(), "resume button")
+srv.shutdown()
+
+# ---------------- 9. High-probability decisions ----------------
+J = ai.Judgement
+fav = mk(20, "fav", 0.92, 0.93)                     # YES costs 0.93, NO costs 0.08
+check(strategies.decide(J(True, 0.96, 0.85, False, ""), fav) == ("YES", 0.96 - 0.93) or
+      abs(strategies.decide(J(True, 0.96, 0.85, False, ""), fav)[1] - 0.03) < 1e-9, "high-prob YES with 3pt edge")
+check(strategies.decide(J(True, 0.96, 0.70, False, ""), fav) is None, "high-prob needs 80% confidence")
+check(strategies.decide(J(True, 0.94, 0.90, False, ""), fav) is None, "1pt edge too small even at 90c+")
+mid = mk(21, "mid", 0.49, 0.51)
+check(strategies.decide(J(True, 0.54, 0.90, False, ""), mid) is None, "normal zone still needs 7 points")
+check(strategies.decide(J(True, 0.59, 0.90, False, ""), mid)[0] == "YES", "normal zone 8pt edge trades")
+longshot = mk(22, "ls", 0.06, 0.07)                 # NO costs 0.94
+d = strategies.decide(J(True, 0.02, 0.9, False, ""), longshot)
+check(d is not None and d[0] == "NO" and abs(d[1] - 0.04) < 1e-9, "NO on a long shot counts as high-prob")
+db6 = DB(":memory:")
+check(Broker(db6).buy(fav, "YES", 0.96, "news") is not None, "can now buy at 93c")
+check(abs(db6.open_positions()[0]["price"] - 0.93) < 1e-9, "bought at ask")
+
+# ---------------- 10. Parallel feed fetching ----------------
+RSS = b"""<?xml version="1.0"?><rss version="2.0"><channel><title>Test Feed</title>
+<item><title>Fed holds rates &amp; signals cut</title><description>&lt;p&gt;Powell said&lt;/p&gt;</description>
+<link>https://x/1</link><pubDate>Wed, 11 Nov 2026 12:00:00 GMT</pubDate></item></channel></rss>"""
+class FakeResp:
+    def __init__(s, ok): s.ok, s.content = ok, RSS
+    def raise_for_status(s):
+        if not s.ok: raise RuntimeError("404")
+calls = []
+def fake_get(url, timeout, headers):
+    calls.append(url); time.sleep(0.2)
+    return FakeResp("bad" not in url)
+real_get = news_feeds.requests.get
+news_feeds.requests.get = fake_get
+old_feeds = config.RSS_FEEDS
+config.RSS_FEEDS = [f"https://feed{i}" for i in range(12)] + ["https://bad"]
+t0 = time.time(); got = news_feeds.fetch_rss(); took = time.time() - t0
+config.RSS_FEEDS = old_feeds
+news_feeds.requests.get = real_get
+check(len(calls) == 13 and took < 1.0, f"13 feeds fetched in parallel ({took:.2f}s)")
+check(len(got) == 1 and got[0].text == "Fed holds rates & signals cut. Powell said", "dedupe across feeds + HTML cleaned")
+check(len(config.RSS_FEEDS) >= 30, "30+ news sources configured")
+
+# ---------------- 11. Static (GitHub Pages) dashboard ----------------
+import tempfile, re as _re
+out = os.path.join(tempfile.mkdtemp(), "site", "index.html")
+dashboard.export_static(db3, out)
+page = open(out, encoding="utf-8").read()
+blob = _re.search(r"window.STATIC_STATE=(.*?);</script>", page, _re.S).group(1)
+st2 = json.loads(blob.replace("<\\/", "</"))
+check(st2["static"] and len(st2["open"]) == 1, "static dashboard embeds the data")
+check('http-equiv="refresh"' in page and "</script><script>" in page, "static page auto-refreshes")
+
+# ---------------- 12. Engine one pass ----------------
+news_feeds.fetch_all = lambda: []
+strategies.arb_core.load_events = lambda: events
+strategies.arb_core.get_book = book
+e = Engine(DB(":memory:"), Broker(DB(":memory:")))
+e.run_once()
+check(e.db.get("last_slow") and e.db.get("last_news"), "engine ran every task")
+
+print(f"\n{ok} checks passed.\nALL TESTS PASSED")

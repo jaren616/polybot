@@ -1,0 +1,64 @@
+name: polybot
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 minutes (GitHub may start it a few minutes late)
+  workflow_dispatch:          # "Run workflow" button for testing
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: polybot             # one run at a time, so the database is never written twice at once
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # The database (trades, signals, history) lives in GitHub's cache between runs,
+      # not in the repository, so your trade history isn't public and the repo stays small.
+      - name: Load database from last run
+        uses: actions/cache/restore@v4
+        with:
+          path: polybot_v2.db
+          key: polybot-db-${{ github.run_id }}
+          restore-keys: polybot-db-
+
+      - name: Run Polybot (paper)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          POLYBOT_MODE: paper
+          POLYBOT_PAUSED: ${{ vars.POLYBOT_PAUSED }}
+          POLYBOT_MAX_NEWS_AGE: "60"
+          POLYBOT_PRICE_HISTORY_HOURS: "2"
+        run: python run.py cloud
+
+      - name: Save database for next run
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: polybot_v2.db
+          key: polybot-db-${{ github.run_id }}
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

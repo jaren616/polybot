@@ -1,0 +1,3 @@
+# Only needed for LIVE trading. Paper mode doesn't use it.
+-r requirements.txt
+py-clob-client>=0.20
