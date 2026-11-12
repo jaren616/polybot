@@ -43,6 +43,7 @@ jobs:
       - name: Run Polybot (paper)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           POLYBOT_MODE: paper
           POLYBOT_PAUSED: ${{ vars.POLYBOT_PAUSED }}
           POLYBOT_MAX_NEWS_AGE: "60"

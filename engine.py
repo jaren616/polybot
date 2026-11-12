@@ -14,6 +14,8 @@ class Engine:
         self.db, self.broker = db, broker
         self.news = strategies.NewsStrategy(db, broker)
         self.slow = strategies.SlowScan(db)
+        self.sports = strategies.SportsStrategy(db, broker)
+        self.fast = strategies.FastScan(db, broker)
         self.stop = threading.Event()
         self.next_run = {}
 
@@ -34,6 +36,8 @@ class Engine:
     def fast_tick(self):
         if config.ENABLE_NEWS and self._due("news", config.NEWS_EVERY):
             self._safe("news", self.news.run)
+        if (config.ENABLE_MOMENTUM or config.ENABLE_FAVOURITES) and self._due("fast", config.FAST_SCAN_EVERY):
+            self._safe("momentum/favourites", self.fast.run)
         if self._due("mark", config.MARK_EVERY):
             self._safe("mark", lambda: strategies.mark_positions(self.db))
         if self._due("settle", config.SETTLE_EVERY):
@@ -48,8 +52,11 @@ class Engine:
             self._safe("geo", geo)
 
     def slow_tick(self):
-        if (config.ENABLE_ARB or config.ENABLE_MOVERS) and self._due("slow", config.SLOW_SCAN_EVERY):
+        if (config.ENABLE_ARB or config.ENABLE_MOVERS or config.ENABLE_SPORTS) \
+                and self._due("slow", config.SLOW_SCAN_EVERY):
             self._safe("arb/movers", self.slow.run)
+            if config.ENABLE_SPORTS and self.slow.events:
+                self._safe("sports", lambda: self.sports.run(self.slow.events))
 
     def _loop(self, tick):
         while not self.stop.is_set():

@@ -6,6 +6,7 @@ import arb_core
 import config
 import data
 import news_feeds
+import sports
 from matcher import Matcher
 
 
@@ -39,7 +40,7 @@ class NewsStrategy:
 
     def refresh(self):
         if time.time() - self.loaded_at > config.MARKETS_REFRESH_EVERY or not self.matcher:
-            markets = data.load_active_markets()
+            markets = [m for m in data.load_active_markets() if m.is_yes_no]  # AI judges Yes/No questions
             self.matcher, self.loaded_at = Matcher(markets), time.time()
             self.db.set("markets_loaded", len(markets))
 
@@ -87,10 +88,12 @@ class NewsStrategy:
 class SlowScan:
     def __init__(self, db):
         self.db = db
+        self.events = []
 
     def run(self, events=None, book=None):
         book = book or arb_core.get_book
         events = arb_core.load_events() if events is None else events
+        self.events = events
         all_legs, found, n_niche = [], [], 0
         for ev in events:
             raw = ev.get("markets", [])
@@ -152,25 +155,139 @@ def detect_movers(db, legs, now=None) -> int:
 
 
 # =====================================================================
+#  4. SPORTS VALUE (Polymarket vs bookmakers)
+# =====================================================================
+class SportsStrategy:
+    def __init__(self, db, broker):
+        self.db, self.broker = db, broker
+
+    def run(self, events, fetch=None, now=None):
+        now = now or time.time()
+        cache = sports.refresh_odds(self.db, **({"fetch": fetch} if fetch else {}), now=now)
+        if now - cache.get("ts", 0) > config.ODDS_MAX_AGE_MINUTES * 60:
+            return 0  # no odds, or too old to trust
+        n = 0
+        for o in sports.find_opportunities(events, cache.get("games", []), now):
+            m = o["market"]
+            if self.db.has_open(m.id):
+                continue
+            lbl = m.label(o["side"])
+            sid = self.db.add_signal(
+                "sports", m.question, f"{o['game']}: bookmakers {o['fair']:.0%} vs Polymarket {o['price']:.0%} "
+                f"for {lbl} ({o['edge'] * 100:.1f} points cheap, {o['books']} books)", m.id, m.url,
+                {"fair": round(o["fair"], 3), "price": o["price"], "edge": round(o["edge"], 3),
+                 "sport": o["sport"], "books": o["books"]})
+            if self.broker.buy(m, o["side"], o["fair"], "sports", signal_id=sid, stake=config.SPORTS_STAKE):
+                n += 1
+        self.db.set("last_sports", now)
+        return n
+
+
+# =====================================================================
+#  5 + 6. MOMENTUM and FAVOURITES (re-price the busiest markets every minute)
+# =====================================================================
+class FastScan:
+    def __init__(self, db, broker):
+        self.db, self.broker = db, broker
+
+    def run(self, markets=None, now=None):
+        now = now or time.time()
+        markets = data.load_active_markets(config.FAST_MARKETS) if markets is None else markets
+        ref_ts, ref = self.db.prices_at_or_before(now - config.MOMENTUM_WINDOW_MINUTES * 60)
+        self.db.add_prices([(m.id, m.mid, m.vol24) for m in markets], now)
+        n = 0
+        if config.ENABLE_MOMENTUM and ref_ts and now - ref_ts <= config.MOMENTUM_WINDOW_MINUTES * 60 * 1.5:
+            n += self.momentum(markets, ref, ref_ts, now)
+        if config.ENABLE_FAVOURITES:
+            n += self.favourites(markets, now)
+        self.db.set("last_fast", now)
+        return n
+
+    def momentum(self, markets, ref, ref_ts, now):
+        n = 0
+        cooldown = now - config.MOMENTUM_COOLDOWN_HOURS * 3600
+        for m in markets:
+            if m.id not in ref or m.liquidity < config.MOMENTUM_MIN_LIQUIDITY or m.spread > config.MOMENTUM_MAX_SPREAD:
+                continue
+            move = m.mid - ref[m.id][0]
+            if abs(move) < config.MOMENTUM_MIN_MOVE or not (0.10 < m.mid < 0.90):
+                continue
+            if self.db.recent_signal("momentum", m.id, cooldown) or self.db.has_open(m.id):
+                continue
+            side = "YES" if move > 0 else "NO"
+            sid = self.db.add_signal(
+                "momentum", m.question, f"{m.outcomes[0]} moved {move * 100:+.0f} points "
+                f"({ref[m.id][0]:.2f} -> {m.mid:.2f}) in {(now - ref_ts) / 60:.0f} min: following it",
+                m.id, m.url, {"move": round(move, 3), "from": round(ref[m.id][0], 3), "to": round(m.mid, 3)})
+            if self.broker.buy(m, side, None, "momentum", signal_id=sid, stake=config.MOMENTUM_STAKE):
+                n += 1
+        return n
+
+    def favourites(self, markets, now):
+        n = 0
+        for m in sorted(markets, key=lambda m: m.end_ts or 9e18):
+            if n >= config.FAV_MAX_NEW_PER_SCAN:
+                break
+            end = m.end_ts
+            if not end or not (0 < end - now <= config.FAV_MAX_HOURS * 3600):
+                continue
+            if m.liquidity < config.FAV_MIN_LIQUIDITY or m.spread > config.FAV_MAX_SPREAD or self.db.has_open(m.id):
+                continue
+            for side, price in (("YES", m.best_ask), ("NO", round(1 - m.best_bid, 4))):
+                if config.FAV_MIN_PRICE <= price <= config.FAV_MAX_PRICE:
+                    if self.db.recent_signal("favourite", m.id, now - 86400):
+                        break
+                    sid = self.db.add_signal(
+                        "favourite", m.question, f"{m.label(side)} at {price:.2f}, resolves in "
+                        f"{(end - now) / 3600:.0f}h", m.id, m.url, {"price": price, "hours": round((end - now) / 3600)})
+                    if self.broker.buy(m, side, None, "favourites", signal_id=sid, stake=config.FAV_STAKE):
+                        n += 1
+                    break
+        return n
+
+
+# =====================================================================
 #  POSITION UPKEEP
 # =====================================================================
-def mark_positions(db, get=None):
-    get = get or data.get_market
+def mark_positions(db, get=None, now=None):
+    """Update each open position's price, and sell any that hit an exit rule."""
+    now = now or time.time()
+    if get is None:
+        batch = data.get_markets([p["market_id"] for p in db.open_positions()])
+        get = batch.get
     for p in db.open_positions():
         m = get(p["market_id"])
-        if m:
-            db.update_mark(p["id"], m.mid if p["side"] == "YES" else 1 - m.mid)
+        if not m:
+            continue
+        db.update_mark(p["id"], m.mid if p["side"] == "YES" else 1 - m.mid)
+        rule = config.EXIT_RULES.get(p["strategy"])
+        if not rule or m.closed or p["mode"] != "paper":
+            continue
+        sell = m.best_bid if p["side"] == "YES" else 1 - m.best_ask   # what we'd actually get
+        reason = None
+        if sell >= p["price"] + rule["take_profit"]:
+            reason = "take profit"
+        elif sell <= p["price"] - rule["stop_loss"]:
+            reason = "stop loss"
+        elif now - p["ts"] >= rule["max_hours"] * 3600:
+            reason = "time limit"
+        if reason:
+            pnl = db.close_position_at(p["id"], sell, reason)
+            db.log(f"EXIT ({reason}) {p['label'] or p['side']} {p['question'][:55]}: "
+                   f"{'+' if pnl >= 0 else ''}${pnl:.2f}")
     return db.snapshot_equity()
 
 
 def settle_positions(db, get=None):
-    get = get or data.get_market
+    if get is None:
+        batch = data.get_markets([p["market_id"] for p in db.open_positions()])
+        get = batch.get
     n = 0
     for p in db.open_positions():
         m = get(p["market_id"])
         if m and m.closed and m.yes_final is not None:
             pnl = db.close_position(p["id"], m.yes_final)
-            db.log(f"SETTLED {p['side']} {p['question'][:60]}: {'+' if pnl >= 0 else ''}${pnl:.2f}"
+            db.log(f"SETTLED {p['label'] or p['side']} {p['question'][:60]}: {'+' if pnl >= 0 else ''}${pnl:.2f}"
                    + (" (redeem winnings on polymarket.com)" if p["mode"] == "live" and pnl > 0 else ""))
             n += 1
     db.set("last_settle", time.time())

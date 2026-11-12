@@ -1,6 +1,8 @@
 """Polymarket data access (read-only, public, no keys needed)."""
 import json
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 import requests
 
@@ -28,6 +30,23 @@ class Market:
     no_token: str | None = None
     min_size: float = 5.0
     tick: float = 0.01
+    outcomes: tuple = ("Yes", "No")      # sports markets: e.g. ("Lakers", "Celtics")
+    game_start: float | None = None      # unix time a sports game starts
+    sports_type: str | None = None       # e.g. "moneyline"
+    line: float | None = None            # spread/total line (we skip those)
+    group_title: str = ""                # e.g. "Draw" or a team name inside a match event
+    end_ts: float | None = None
+
+    @property
+    def is_yes_no(self) -> bool:
+        return [o.lower() for o in self.outcomes] == ["yes", "no"]
+
+    @property
+    def spread(self) -> float:
+        return self.best_ask - self.best_bid
+
+    def label(self, side: str) -> str:
+        return self.outcomes[0 if side == "YES" else 1]
 
     @property
     def url(self) -> str:
@@ -47,13 +66,30 @@ def _j(v, default):
         return default
 
 
+def parse_ts(v) -> float | None:
+    """Polymarket dates come in a few shapes: '2026-11-15T20:00:00Z', '2026-11-15 20:00:00+00'..."""
+    if not v:
+        return None
+    s = str(v).strip().replace(" ", "T").replace("Z", "+00:00")
+    if len(s) >= 3 and s[-3] in "+-" and s[-2:].isdigit():   # '+00' -> '+00:00'
+        s += ":00"
+    try:
+        d = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    return d.timestamp()
+
+
 def parse_market(m: dict) -> Market | None:
+    """Any two-outcome market: Yes/No, or two teams (sports)."""
     outcomes = _j(m.get("outcomes"), [])
     try:
         prices = [float(p) for p in _j(m.get("outcomePrices"), [])]
     except (ValueError, TypeError):
         return None
-    if [str(o).lower() for o in outcomes] != ["yes", "no"] or len(prices) != 2:
+    if len(outcomes) != 2 or len(prices) != 2:
         return None
     yes = prices[0]
     bid = float(m.get("bestBid") or 0) or max(yes - 0.01, 0.0)
@@ -75,6 +111,12 @@ def parse_market(m: dict) -> Market | None:
         no_token=tokens[1] if len(tokens) > 1 else None,
         min_size=float(m.get("orderMinSize") or 5),
         tick=float(m.get("orderPriceMinTickSize") or 0.01),
+        outcomes=(str(outcomes[0]), str(outcomes[1])),
+        game_start=parse_ts(m.get("gameStartTime") or m.get("eventStartTime")),
+        sports_type=m.get("sportsMarketType"),
+        line=float(m["line"]) if m.get("line") not in (None, "") else None,
+        group_title=m.get("groupItemTitle") or "",
+        end_ts=parse_ts(m.get("endDate")),
     )
 
 
@@ -107,6 +149,26 @@ def get_market(market_id: str) -> Market | None:
     if r.status_code != 200:
         return None
     return parse_market(r.json())
+
+
+def get_markets(ids) -> dict[str, Market]:
+    """Many markets in a few requests (100 per request), open or closed."""
+    out, ids = {}, list(dict.fromkeys(str(i) for i in ids))
+    for i in range(0, len(ids), 100):
+        try:
+            r = S.get(f"{config.GAMMA_URL}/markets",
+                      params={"id": ids[i:i + 100], "closed": "any", "limit": 100}, timeout=20)
+            r.raise_for_status()
+            for raw in r.json():
+                mk = parse_market(raw)
+                if mk:
+                    out[mk.id] = mk
+        except Exception:
+            for one in ids[i:i + 100]:  # fall back to one at a time
+                mk = get_market(one)
+                if mk:
+                    out[one] = mk
+    return out
 
 
 def geoblock() -> dict | None:

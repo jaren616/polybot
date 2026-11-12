@@ -42,6 +42,12 @@ class DB:
         self.lock = threading.RLock()
         with self.lock:
             self.conn.executescript(SCHEMA)
+            for col in ("label TEXT", "exit_reason TEXT"):  # columns added in later versions
+                try:
+                    self.conn.execute(f"ALTER TABLE positions ADD COLUMN {col}")
+                except sqlite3.OperationalError:
+                    pass  # already there
+            self.conn.commit()
 
     # ---------- low level ----------
     def q(self, sql, args=()):
@@ -99,6 +105,9 @@ class DB:
     def has_open(self, market_id) -> bool:
         return bool(self.q("SELECT 1 FROM positions WHERE status='open' AND market_id=?", (market_id,)))
 
+    def open_count(self, strategy) -> int:
+        return self.q("SELECT COUNT(*) n FROM positions WHERE status='open' AND strategy=?", (strategy,))[0]["n"]
+
     def trades_today(self) -> int:
         return self.q("SELECT COUNT(*) n FROM positions WHERE ts>=?", (day_start(),))[0]["n"]
 
@@ -116,6 +125,29 @@ class DB:
         self.x("UPDATE positions SET status='closed', yes_final=?, pnl=?, closed_ts=?, mark=? WHERE id=?",
                (yes_final, pnl, time.time(), payout_per_share, pid))
         return pnl
+
+    def close_position_at(self, pid, sell_price, reason):
+        """Sell before resolution (paper): shares x sell price - cost."""
+        p = self.q("SELECT * FROM positions WHERE id=?", (pid,))[0]
+        pnl = p["shares"] * sell_price - p["cost"]
+        self.x("UPDATE positions SET status='closed', pnl=?, closed_ts=?, mark=?, exit_reason=? WHERE id=?",
+               (pnl, time.time(), sell_price, reason, pid))
+        return pnl
+
+    def strategy_stats(self):
+        rows = {}
+        for p in self.q("SELECT * FROM positions"):
+            r = rows.setdefault(p["strategy"], {"strategy": p["strategy"], "open": 0, "closed": 0, "wins": 0,
+                                                "realized": 0.0, "unrealized": 0.0, "staked": 0.0})
+            r["staked"] += p["cost"]
+            if p["status"] == "open":
+                r["open"] += 1
+                r["unrealized"] += p["shares"] * (p["mark"] if p["mark"] is not None else p["price"]) - p["cost"]
+            else:
+                r["closed"] += 1
+                r["wins"] += p["pnl"] > 0
+                r["realized"] += p["pnl"]
+        return sorted(rows.values(), key=lambda r: -(r["realized"] + r["unrealized"]))
 
     # ---------- money ----------
     def money(self):

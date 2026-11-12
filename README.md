@@ -8,6 +8,16 @@ A Polymarket trading bot with three strategies, risk controls, and a live browse
 | **AI news** | Reads news every minute, matches it to markets, asks Claude whether it changes the odds, buys when the estimate beats the price by 7+ points | Yes (paper or live) |
 | **Arbitrage** | Every 5 min, scans ~4,000 events for prices that contradict each other in quiet markets; tracks how long each gap lasts | Alerts only |
 | **Price moves** | Flags markets that jump 10+ points in an hour, or get a sudden volume spike (often someone knows something) | Alerts only |
+| **Sports value** | Compares Polymarket's game prices with bookmakers' odds (margin removed, Pinnacle preferred); buys outcomes 4+ points cheaper on Polymarket | Yes, paper only, $5 each |
+| **Momentum** | Re-prices the 1,000 busiest markets every minute; follows any 6+ point move in 15 min; sells at +5 points, -4 points, or after 6 hours | Yes, paper only, $5 each |
+| **Favourites** | Buys outcomes priced 90-97c that resolve within 2 days | Yes, paper only, $5 each |
+
+The dashboard's **By strategy** table shows each strategy's own P&L and win rate, so you can
+see which ones actually work. Turn any of them off with the `ENABLE_...` settings in config.py.
+
+**Sports value needs a free odds key:** sign up at the-odds-api.com (500 credits a month free),
+then `set ODDS_API_KEY=...` before `py run.py` (on GitHub: a secret named `ODDS_API_KEY`).
+With the default 3 sports checked every 6 hours it uses about 360 credits a month.
 
 Arbitrage is never auto-traded: it needs several orders to fill at once, and if only some fill
 you're left holding a one-sided bet. Act on those alerts by hand after reading the rules.
@@ -103,8 +113,8 @@ The `.github/workflows/polybot.yml` file runs one pass of everything every ~10 m
 GitHub's servers and publishes the dashboard as a website. **Paper only**: GitHub's servers are
 in the US, where Polymarket trading isn't allowed, and a private key must never go on GitHub.
 
-- **API key:** repository **Settings → Secrets and variables → Actions → New repository secret**,
-  name `ANTHROPIC_API_KEY`. Secrets are hidden, even in a public repository.
+- **API keys:** repository **Settings → Secrets and variables → Actions → New repository secret**,
+  name `ANTHROPIC_API_KEY` (and `ODDS_API_KEY` for sports). Secrets are hidden, even in a public repository.
 - **Website:** **Settings → Pages → Source: GitHub Actions**. The dashboard appears at
   `https://<username>.github.io/<repository>/` and refreshes every 2 minutes.
 - **Pause / resume:** **Settings → Secrets and variables → Actions → Variables**, add
@@ -119,6 +129,7 @@ in the US, where Polymarket trading isn't allowed, and a private key must never 
 | File | Job |
 |---|---|
 | `run.py` | Start here |
+| `sports.py` | Bookmaker odds, margin removal, matching games to Polymarket |
 | `config.py` | Every setting |
 | `engine.py` | Runs strategies on their schedules |
 | `strategies.py` | News trading, arbitrage + movers, settlement |

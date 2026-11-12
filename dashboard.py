@@ -44,6 +44,9 @@ def state(db) -> dict:
                   "arbs_total": len(db.q("SELECT key FROM arbs")), "arb_median_min": arb_med,
                   "signals": sig_counts},
         "equity": [[r["ts"], r["equity"]] for r in eq] + [[time.time(), m["equity"]]],
+        "by_strategy": db.strategy_stats(),
+        "odds": {k: v for k, v in (db.get("odds_cache") or {}).items() if k != "games"},
+        "odds_on": bool(config.ODDS_API_KEY),
         "open": [dict(p) for p in db.open_positions()],
         "closed": [dict(p) for p in closed[:50]],
         "signals": [dict(s) | {"data": json.loads(s["data"] or "{}")}
@@ -148,7 +151,9 @@ a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
 .q{max-width:380px}
 .tag{font-size:11px;font-weight:650;padding:1px 7px;border-radius:6px;white-space:nowrap}
 .t-news{background:var(--newsbg);color:var(--news)}.t-arb{background:var(--arbbg);color:var(--arb)}
-.t-mover{background:var(--warnbg);color:var(--warn)}.t-YES{background:var(--goodbg);color:var(--good)}
+.t-mover{background:var(--warnbg);color:var(--warn)}
+.t-sports{background:var(--goodbg);color:var(--good)}.t-momentum{background:var(--accbg);color:var(--acc)}
+.t-favourite,.t-favourites{background:var(--soft);color:var(--ink)}.t-YES{background:var(--goodbg);color:var(--good)}
 .t-NO{background:var(--badbg);color:var(--bad)}
 .chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
 .chip{border:1px solid var(--line);background:var(--card);border-radius:999px;padding:3px 11px;font-size:12px;cursor:pointer;color:var(--mute)}
@@ -168,6 +173,7 @@ svg text{fill:var(--mute);font-size:11px}
 <span class="sp"></span><span id="upd" class="muted small"></span><button id="toggle">Pause</button></header>
 <div id="banners"></div>
 <div class="kpis" id="kpis"></div>
+<div class="card"><h2>By strategy</h2><div class="tbl" id="strat"></div></div>
 <div class="grid"><div>
  <div class="card"><h2>Equity <span class="muted" id="eqsub"></span></h2><div id="chart"></div></div>
  <div class="card"><h2>Open positions <span class="muted" id="opensub"></span></h2><div class="tbl" id="open"></div></div>
@@ -211,26 +217,33 @@ function render(){
   ["Win rate",`${wr} <span class="small muted">${st.closed} closed</span>`,""],
   ["Brier (you vs mkt)",br,""],
  ].map(([k,v,c])=>`<div class="kpi"><span>${k}</span><b class="${c}">${v}</b></div>`).join("");
+ const SN={news:"AI news",sports:"Sports value",momentum:"Momentum",favourites:"Favourites"};
+ const bs=S.by_strategy||[];
+ $("strat").innerHTML=bs.length?`<table><tr><th>Strategy</th><th class="r">Open</th><th class="r">Closed</th><th class="r">Win rate</th><th class="r">Staked</th><th class="r">Realised</th><th class="r">Unrealised</th><th class="r">Total</th></tr>`+
+  bs.map(r=>{const t=r.realized+r.unrealized;return`<tr><td><span class="tag t-${r.strategy}">${esc(SN[r.strategy]||r.strategy)}</span></td><td class="r">${r.open}</td><td class="r">${r.closed}</td><td class="r">${r.closed?Math.round(100*r.wins/r.closed)+"%":"–"}</td><td class="r">$${r.staked.toFixed(0)}</td><td class="r ${cls(r.realized)}">${usd(r.realized,1)}</td><td class="r ${cls(r.unrealized)}">${usd(r.unrealized,1)}</td><td class="r ${cls(t)}"><b>${usd(t,1)}</b></td></tr>`}).join("")+"</table>"
+  +(S.odds_on?`<div class="small muted" style="margin-top:8px">Bookmaker odds ${S.odds.ts?"updated "+ago(S.odds.ts):"not fetched yet"}${S.odds.remaining!=null?` · ${S.odds.remaining} API credits left this month`:""}</div>`:`<div class="small muted" style="margin-top:8px">Sports value is off: set ODDS_API_KEY to turn it on.</div>`)
+  :`<div class="empty">No trades yet.</div>`+(S.odds_on?"":`<div class="small muted">Sports value is off: set ODDS_API_KEY to turn it on.</div>`);
  chart();
  $("eqsub").textContent=`starting bankroll $${S.limits.BANKROLL}`;
  $("opensub").textContent=S.open.length?`${S.open.length} open`:"";
- $("open").innerHTML=S.open.length?`<table><tr><th>Market</th><th>Side</th><th class="r">Entry</th><th class="r">Now</th><th class="r">Cost</th><th class="r">P&L</th><th>Opened</th></tr>`+
-  S.open.map(p=>{const v=p.shares*(p.mark??p.price),u=v-p.cost;return`<tr><td class="q"><a href="${esc(p.url)}" target="_blank">${esc(p.question)}</a> <span class="small muted">${p.mode}</span></td><td><span class="tag t-${p.side}">${p.side}</span></td><td class="r">${p.price.toFixed(3)}</td><td class="r">${(p.mark??p.price).toFixed(3)}</td><td class="r">$${p.cost.toFixed(2)}</td><td class="r ${cls(u)}">${usd(u,1)}</td><td class="small muted">${tm(p.ts)}</td></tr>`}).join("")+"</table>"
+ $("open").innerHTML=S.open.length?`<table><tr><th>Market</th><th>Bought</th><th class="r">Entry</th><th class="r">Now</th><th class="r">Cost</th><th class="r">P&L</th><th>Opened</th></tr>`+
+  S.open.map(p=>{const v=p.shares*(p.mark??p.price),u=v-p.cost;return`<tr><td class="q"><a href="${esc(p.url)}" target="_blank">${esc(p.question)}</a> <span class="small muted">${p.mode}</span></td><td><span class="tag t-${p.side}">${esc((p.label||p.side).slice(0,18))}</span> <span class="tag t-${p.strategy}">${esc(SN[p.strategy]||p.strategy)}</span></td><td class="r">${p.price.toFixed(3)}</td><td class="r">${(p.mark??p.price).toFixed(3)}</td><td class="r">$${p.cost.toFixed(2)}</td><td class="r ${cls(u)}">${usd(u,1)}</td><td class="small muted">${tm(p.ts)}</td></tr>`}).join("")+"</table>"
   :`<div class="empty">No open positions.</div>`;
- $("closed").innerHTML=S.closed.length?`<table><tr><th>Market</th><th>Side</th><th class="r">Entry</th><th class="r">Your p</th><th>Result</th><th class="r">P&L</th></tr>`+
-  S.closed.map(p=>`<tr><td class="q"><a href="${esc(p.url)}" target="_blank">${esc(p.question)}</a></td><td><span class="tag t-${p.side}">${p.side}</span></td><td class="r">${p.price.toFixed(3)}</td><td class="r">${p.est_prob==null?"–":p.est_prob.toFixed(2)}</td><td>${p.yes_final==1?"YES":"NO"}</td><td class="r ${cls(p.pnl)}">${usd(p.pnl,1)}</td></tr>`).join("")+"</table>"
+ $("closed").innerHTML=S.closed.length?`<table><tr><th>Market</th><th>Bought</th><th class="r">Entry</th><th class="r">Your p</th><th>Result</th><th class="r">P&L</th></tr>`+
+  S.closed.map(p=>`<tr><td class="q"><a href="${esc(p.url)}" target="_blank">${esc(p.question)}</a></td><td><span class="tag t-${p.side}">${esc((p.label||p.side).slice(0,18))}</span> <span class="tag t-${p.strategy}">${esc(SN[p.strategy]||p.strategy)}</span></td><td class="r">${p.price.toFixed(3)}</td><td class="r">${p.est_prob==null?"–":p.est_prob.toFixed(2)}</td><td>${esc(p.exit_reason||(p.pnl>0?"won":"lost"))}</td><td class="r ${cls(p.pnl)}">${usd(p.pnl,1)}</td></tr>`).join("")+"</table>"
   :`<div class="empty">Nothing settled yet. Markets can take weeks to resolve.</div>`;
  const ss=S.slow_stats;
  $("arbsub").textContent=ss?`${ss.events.toLocaleString()} events · ${ss.niche.toLocaleString()} niche · ${st.arbs_total} gaps logged`+(st.arb_median_min!=null?` · median life ${Math.round(st.arb_median_min)} min`:""):"first scan running…";
  $("arbs").innerHTML=S.arbs.length?`<table><tr><th>Seen</th><th>Type</th><th>Market</th><th class="r">Gap</th><th class="r">Max $</th><th class="r">Per year</th><th>Status</th></tr>`+
   S.arbs.slice(0,40).map(a=>`<tr><td class="small muted">${tm(a.first_seen)}</td><td><span class="tag t-arb">${esc(a.type)}</span></td><td class="q"><a href="${esc(a.url)}" target="_blank">${esc(a.event)}</a></td><td class="r">${(a.best_profit*100).toFixed(1)}c</td><td class="r">$${(a.best_profit*(a.last_size||0)).toFixed(2)}</td><td class="r ${a.apr<.05?"neg":"pos"}">${Math.round(a.apr*100)}%</td><td class="small">${a.open?"open":Math.round((a.last_seen-a.first_seen)/60)+" min"}</td></tr>`).join("")+"</table>"
   :`<div class="empty">No gaps found yet.</div>`;
- const kinds=[["all","All"],["news","News"],["arb","Arbitrage"],["mover","Price moves"]];
+ const kinds=[["all","All"],["news","News"],["sports","Sports"],["momentum","Momentum"],["favourite","Favourites"],["arb","Arbitrage"],["mover","Price moves"]];
  $("chips").innerHTML=kinds.map(([k,l])=>`<span class="chip ${filter===k?"on":""}" data-k="${k}">${l}${k!=="all"&&st.signals[k]?" "+st.signals[k]:""}</span>`).join("");
  document.querySelectorAll(".chip").forEach(c=>c.onclick=()=>{filter=c.dataset.k;render()});
  const sg=S.signals.filter(s=>filter==="all"||s.kind===filter).slice(0,60);
  $("sigs").innerHTML=sg.length?sg.map(s=>{const d=s.data||{};let extra="";
   if(s.kind==="news")extra=`${esc(d.source)} · ${d.age_min}m old · market ${d.yes}`+(d.p_yes!=null?` · AI says ${d.p_yes} (conf ${d.conf})`:"")+(d.reason?`<br><i>${esc(d.reason)}</i>`:"");
+  if(s.kind==="sports")extra=`${esc(d.sport||"")} · ${d.books} bookmakers`;
   if(s.kind==="arb")extra=`${d.profit_c}c per set · up to $${d.max_usd} · ${d.days} days · ${Math.round(d.apr*100)}%/yr`;
   return`<div class="sig"><div class="top"><span class="tag t-${s.kind}">${s.kind}</span><a class="t" href="${esc(s.url)}" target="_blank">${esc(s.title)}</a><span class="sp"></span><span class="small muted">${ago(s.ts)}</span></div>
   <div class="d small">${esc(s.detail)}</div>${extra?`<div class="small muted">${extra}</div>`:""}<div class="a ${String(s.action).includes("buy")?"act-buy":"muted"}">${esc(s.action||"")}</div></div>`}).join("")

@@ -61,7 +61,7 @@ sid = db.add_signal("news", "t", "d")
 b.buy(mk(3, "y", 0.30, 0.32), "NO", 0.10, "news", signal_id=sid)
 p3 = [p for p in db.open_positions() if p["market_id"] == "3"][0]
 check(p3["side"] == "NO" and abs(p3["price"] - 0.70) < 1e-9, "NO bought at 1 - bid")
-check("paper buy NO" in db.q("SELECT action FROM signals WHERE id=?", (sid,))[0]["action"], "signal records action")
+check("paper buy No" in db.q("SELECT action FROM signals WHERE id=?", (sid,))[0]["action"], "signal records action")
 db.set("paused", True)
 check(b.buy(mk(4, "z", 0.30, 0.32), "YES", 0.6, "news") is None, "paused blocks trades")
 db.set("paused", False)
@@ -231,5 +231,125 @@ strategies.arb_core.get_book = book
 e = Engine(DB(":memory:"), Broker(DB(":memory:")))
 e.run_once()
 check(e.db.get("last_slow") and e.db.get("last_news"), "engine ran every task")
+
+# ---------------- 13. Sports value ----------------
+import sports
+now = time.time()
+start = now + 5 * 3600
+iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(start))
+def sm(id, q, outcomes, p0, bid, ask, title="", smt="moneyline", line=None):
+    return {"id": id, "question": q, "outcomes": json.dumps(outcomes), "outcomePrices": json.dumps([str(p0), str(1 - p0)]),
+            "bestBid": bid, "bestAsk": ask, "slug": f"s{id}", "liquidityNum": 20000, "volume24hr": 5000,
+            "gameStartTime": iso, "sportsMarketType": smt, "line": line, "groupItemTitle": title,
+            "clobTokenIds": json.dumps([f"a{id}", f"b{id}"]), "endDate": iso}
+sp_events = [
+    {"title": "Lakers vs. Celtics", "markets": [
+        sm(101, "Lakers vs. Celtics", ["Lakers", "Celtics"], 0.40, 0.39, 0.41),
+        sm(102, "Lakers vs. Celtics: O/U 220.5", ["Over", "Under"], 0.5, 0.49, 0.51, smt="totals", line=220.5)]},
+    {"title": "Man City vs. Chelsea", "markets": [
+        sm(201, "Will Man City win on 2026-11-15?", ["Yes", "No"], 0.50, 0.49, 0.51, title="Man City"),
+        sm(202, "Will Man City vs. Chelsea end in a draw?", ["Yes", "No"], 0.25, 0.24, 0.26, title="Draw"),
+        sm(203, "Will Chelsea win on 2026-11-15?", ["Yes", "No"], 0.25, 0.24, 0.26, title="Chelsea")]},
+    {"title": "Man United vs. Arsenal", "markets": [   # same time, different game: must NOT match City
+        sm(301, "Will Man United win?", ["Yes", "No"], 0.30, 0.29, 0.31, title="Man United")]}]
+games = [{"sport": "basketball_nba", "home": "Boston Celtics", "away": "Los Angeles Lakers", "start": start,
+          "fair": {"Boston Celtics": 0.52, "Los Angeles Lakers": 0.48}, "books": 8},
+         {"sport": "soccer_epl", "home": "Manchester City", "away": "Chelsea", "start": start + 600,
+          "fair": {"Manchester City": 0.58, "Draw": 0.22, "Chelsea": 0.20}, "books": 9}]
+opps = sports.find_opportunities(sp_events, games, now)
+got = {(o["market"].id, o["side"]): round(o["edge"], 3) for o in opps}
+check(got.get(("101", "YES")) == 0.07, f"NBA: Lakers 48% fair vs 41c ask -> 7pt edge {got}")
+check(got.get(("201", "YES")) == 0.07, "EPL: City 58% fair vs 51c -> buy YES")
+check(got.get(("203", "NO")) is not None and abs(got[("203", "NO")] - 0.04) < 1e-9, "EPL: Chelsea NO 80% vs 76c")
+check(not any(k[0] in ("102", "301") for k in got), "totals market and the wrong game are skipped")
+check(not sports.find_opportunities(sp_events, games, start - 600), "no bets within 30 min of kick-off")
+odd = [dict(games[0], fair={"Boston Celtics": 0.15, "Los Angeles Lakers": 0.85})]
+check(not sports.find_opportunities(sp_events, odd, now), "huge gap = probably wrong match -> skipped")
+# odds fetching respects schedule + credits
+dbs = DB(":memory:")
+config.ODDS_API_KEY = "k"
+calls2 = []
+fake = lambda sport: (calls2.append(sport) or ([dict(games[0])] if sport == "basketball_nba" else []), 100)
+sports.refresh_odds(dbs, fetch=fake, now=now)
+sports.refresh_odds(dbs, fetch=fake, now=now + 60)
+check(len(calls2) == len(config.ODDS_SPORTS), "odds fetched once, not every scan")
+dbs.set("odds_cache", {"ts": 0, "games": [], "remaining": 3})
+sports.refresh_odds(dbs, fetch=fake, now=now)
+check(len(calls2) == len(config.ODDS_SPORTS), "stops when credits run low")
+dbs.set("odds_cache", {"ts": now, "games": games, "remaining": 100})
+ss = strategies.SportsStrategy(dbs, Broker(dbs))
+check(ss.run(sp_events, fetch=fake, now=now) == 3, "sports strategy places 3 paper trades")
+lbls = sorted(p["label"] for p in dbs.open_positions())
+check(lbls == ["Lakers", "No", "Yes"], f"outcome labels stored {lbls}")
+check(all(p["cost"] <= config.SPORTS_STAKE + 0.01 for p in dbs.open_positions()), "fixed $5 sports stake")
+config.ODDS_API_KEY = None
+check(sports.devig([{"name": "A", "price": 1.9}, {"name": "B", "price": 1.9}]) == {"A": 0.5, "B": 0.5}, "margin removed")
+fp = sports.fair_probs({"bookmakers": [{"key": k, "markets": [{"key": "h2h", "outcomes": [
+    {"name": "A", "price": pa}, {"name": "B", "price": pb}]}]} for k, pa, pb in
+    [("x", 1.5, 2.6), ("pinnacle", 1.6, 2.5), ("y", 1.4, 2.9)]]})
+check(fp and fp[1] == 3 and abs(fp[0]["A"] - (1 / 1.6) / (1 / 1.6 + 1 / 2.5)) < 1e-9, "Pinnacle preferred")
+
+# ---------------- 14. Momentum + exits ----------------
+dbm = DB(":memory:")
+fs = strategies.FastScan(dbm, Broker(dbm))
+def fm(id, bid, ask, liq=50000, end=None):
+    m = mk(id, f"Market {id}?", bid, ask, liq=liq)
+    m.end_ts = end
+    return m
+fs.run([fm(1, 0.40, 0.41), fm(2, 0.50, 0.51), fm(3, 0.30, 0.31, liq=100)], now=now - 900)
+n = fs.run([fm(1, 0.48, 0.49), fm(2, 0.51, 0.52), fm(3, 0.45, 0.46, liq=100)], now=now)
+opn = dbm.open_positions()
+check(n == 1 and opn[0]["market_id"] == "1" and opn[0]["side"] == "YES" and opn[0]["strategy"] == "momentum",
+      "momentum buys the 8pt mover only (not small move, not illiquid)")
+check(fs.run([fm(1, 0.60, 0.61)], now=now + 60) == 0, "momentum cooldown / one position per market")
+# exits: take profit
+strategies.mark_positions(dbm, get=lambda i: fm(1, 0.55, 0.56), now=now + 120)
+c = dbm.q("SELECT * FROM positions WHERE status='closed'")
+check(len(c) == 1 and c[0]["exit_reason"] == "take profit" and abs(c[0]["pnl"] - (c[0]["shares"] * 0.55 - c[0]["cost"])) < 1e-9,
+      "take profit sells at the bid")
+pid = dbm.add_position(ts=now, mode="paper", strategy="momentum", market_id="9", question="q", url="", side="NO",
+                       token_id="", price=0.60, shares=10, cost=6.0, est_prob=None, market_yes=0.4, mark=0.6, label="No")
+strategies.mark_positions(dbm, get=lambda i: fm(9, 0.44, 0.45), now=now)   # NO now sells at 0.55
+check(dbm.q("SELECT exit_reason FROM positions WHERE id=?", (pid,))[0]["exit_reason"] == "stop loss", "stop loss")
+pid = dbm.add_position(ts=now - 7 * 3600, mode="paper", strategy="momentum", market_id="8", question="q", url="",
+                       side="YES", token_id="", price=0.50, shares=10, cost=5.0, est_prob=None, market_yes=0.5, mark=0.5, label="Yes")
+strategies.mark_positions(dbm, get=lambda i: fm(8, 0.50, 0.51), now=now)
+check(dbm.q("SELECT exit_reason FROM positions WHERE id=?", (pid,))[0]["exit_reason"] == "time limit", "time limit exit")
+
+# ---------------- 15. Favourites ----------------
+dbf = DB(":memory:")
+ff = strategies.FastScan(dbf, Broker(dbf))
+config.ENABLE_MOMENTUM = False
+ff.run([fm(31, 0.94, 0.95, end=now + 10 * 3600),    # YES at 95c, resolves in 10h -> buy
+        fm(32, 0.94, 0.95, end=now + 5 * 86400),    # too far away
+        fm(33, 0.04, 0.05, end=now + 3600),         # NO at 96c -> buy
+        fm(34, 0.98, 0.99, end=now + 3600),         # 99c: above FAV_MAX_PRICE
+        fm(35, 0.60, 0.61, end=now + 3600)], now=now)
+config.ENABLE_MOMENTUM = True
+fav = {(p["market_id"], p["side"]) for p in dbf.open_positions()}
+check(fav == {("31", "YES"), ("33", "NO")}, f"favourites picks the right ones {fav}")
+
+# ---------------- 16. Safety: paper-only strategies, caps, old databases ----------------
+class FakeLive:
+    def buy(self, *a): raise AssertionError("must not reach a live order")
+dbl = DB(":memory:")
+bl = Broker(dbl, live=FakeLive())
+check(bl.buy(fm(40, 0.4, 0.41), "YES", None, "momentum", stake=5) is None, "momentum refused in live mode")
+old_cap = config.STRATEGY_MAX_OPEN["favourites"]
+config.STRATEGY_MAX_OPEN["favourites"] = 1
+dbc = DB(":memory:"); bc = Broker(dbc)
+bc.buy(fm(41, 0.94, 0.95), "YES", None, "favourites", stake=5)
+check(bc.buy(fm(42, 0.94, 0.95), "YES", None, "favourites", stake=5) is None, "per-strategy cap")
+config.STRATEGY_MAX_OPEN["favourites"] = old_cap
+import sqlite3 as _sq, tempfile as _tf
+oldp = os.path.join(_tf.mkdtemp(), "old.db")
+c0 = _sq.connect(oldp)
+c0.execute("CREATE TABLE positions (id INTEGER PRIMARY KEY, ts REAL, mode TEXT, strategy TEXT, market_id TEXT, question TEXT, url TEXT, side TEXT, token_id TEXT, price REAL, shares REAL, cost REAL, est_prob REAL, market_yes REAL, mark REAL, status TEXT DEFAULT 'open', yes_final REAL, pnl REAL, closed_ts REAL, order_id TEXT, signal_id INTEGER)")
+c0.execute("INSERT INTO positions (ts,mode,strategy,market_id,question,url,side,price,shares,cost) VALUES (1,'paper','news','m','q','u','YES',0.5,10,5)")
+c0.commit(); c0.close()
+dbo = DB(oldp)
+check(dbo.open_positions()[0]["label"] is None and len(dbo.strategy_stats()) == 1, "old database upgraded in place")
+st3 = dashboard.state(dbm)
+check(any(r["strategy"] == "momentum" for r in st3["by_strategy"]), "dashboard strategy breakdown")
 
 print(f"\n{ok} checks passed.\nALL TESTS PASSED")

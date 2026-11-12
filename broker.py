@@ -30,10 +30,13 @@ class Risk:
     def daily_pnl(self) -> float:
         return self.db.money()["equity"] - self.db.equity_at(day_start())
 
-    def check(self, market_id, price, stake) -> str | None:
+    def check(self, market_id, price, stake, strategy=None) -> str | None:
         """Return None if OK, otherwise the reason the trade is refused."""
         if self.db.paused():
             return "bot is paused"
+        cap = config.STRATEGY_MAX_OPEN.get(strategy)
+        if cap is not None and self.db.open_count(strategy) >= cap:
+            return f"max open {strategy} positions ({cap})"
         if self.daily_pnl() <= -config.DAILY_LOSS_LIMIT:
             self.db.set("paused", True)
             self.db.log(f"Daily loss limit (${config.DAILY_LOSS_LIMIT:.0f}) hit - bot paused itself", "warn")
@@ -120,19 +123,25 @@ class Broker:
     def mode(self):
         return "live" if self.live else "paper"
 
-    def buy(self, market, side, est_prob, strategy, signal_id=None):
-        """Size with Kelly, run risk checks, then place (paper or live). Returns position id or None."""
+    def buy(self, market, side, est_prob, strategy, signal_id=None, stake=None):
+        """Size with Kelly (or a fixed stake), run risk checks, then place (paper or live).
+        Returns position id or None."""
+        if self.live and strategy in config.PAPER_ONLY_STRATEGIES:
+            return self._refuse(signal_id, f"{strategy} is paper-only")
         if side == "YES":
             price, token = market.best_ask, market.yes_token
         else:
             price, token = round(1 - market.best_bid, 4), market.no_token
-        stake = kelly_stake(est_prob, side, price, self.db.money()["equity"])
+        if stake is not None:
+            stake = round(min(stake, config.MAX_STAKE), 2)
+        else:
+            stake = kelly_stake(est_prob, side, price, self.db.money()["equity"])
         if stake <= 0:
             return self._refuse(signal_id, "edge too small to size")
         shares = math.floor(stake / price * 100) / 100
         if shares < market.min_size:
             return self._refuse(signal_id, f"order below market minimum ({market.min_size:.0f} shares)")
-        reason = self.risk.check(market.id, price, stake)
+        reason = self.risk.check(market.id, price, stake, strategy)
         if reason:
             return self._refuse(signal_id, reason)
 
@@ -149,10 +158,11 @@ class Broker:
             ts=time.time(), mode=self.mode, strategy=strategy, market_id=market.id,
             question=market.question, url=market.url, side=side, token_id=token, price=price,
             shares=shares, cost=round(shares * price, 4), est_prob=est_prob, market_yes=market.mid,
-            mark=price, order_id=order_id, signal_id=signal_id)
-        self.db.log(f"{self.mode.upper()} BUY {side} @ {price:.3f} ${shares * price:.2f} - {market.question[:70]}")
+            mark=price, order_id=order_id, signal_id=signal_id, label=market.label(side))
+        lbl = market.label(side)
+        self.db.log(f"{self.mode.upper()} {strategy} BUY {lbl} @ {price:.3f} ${shares * price:.2f} - {market.question[:70]}")
         if signal_id:
-            self.db.set_signal_action(signal_id, f"{self.mode} buy {side} @ {price:.3f} (${shares * price:.2f})")
+            self.db.set_signal_action(signal_id, f"{self.mode} buy {lbl} @ {price:.3f} (${shares * price:.2f})")
         return pid
 
     def _refuse(self, signal_id, reason):

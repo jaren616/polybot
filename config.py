@@ -25,6 +25,13 @@ POLY_SIGNATURE_TYPE = int(os.getenv("POLY_SIGNATURE_TYPE", "1"))  # 1 = email/Ma
 ENABLE_NEWS = True     # AI news trading (trades, paper or live)
 ENABLE_ARB = True      # arbitrage scanner (alerts + gap tracking, never auto-traded)
 ENABLE_MOVERS = True   # price-move / volume-spike alerts (alerts only)
+ENABLE_SPORTS = True      # sports value: Polymarket vs bookmaker odds (needs ODDS_API_KEY)
+ENABLE_MOMENTUM = True    # follow sharp price moves, exit on take-profit / stop-loss / time
+ENABLE_FAVOURITES = True  # buy 90-97c outcomes that resolve within 2 days
+
+# The high-volume strategies are PAPER ONLY: live mode refuses them. They buy and sell
+# far more often, and their exits (selling early) aren't built for real orders.
+PAPER_ONLY_STRATEGIES = {"sports", "momentum", "favourites"}
 
 # =====================================================================
 #  TIMING (seconds)
@@ -35,6 +42,7 @@ SLOW_SCAN_EVERY = 300      # arbitrage + movers (loads thousands of events, take
 MARK_EVERY = 120           # update prices of open positions + equity snapshot
 SETTLE_EVERY = 1800        # check for resolved markets
 GEOBLOCK_CHECK_EVERY = 3600  # live mode re-checks Polymarket access hourly
+FAST_SCAN_EVERY = 60       # momentum + favourites: re-price the busiest markets every minute
 
 # =====================================================================
 #  NEWS SOURCES
@@ -118,8 +126,56 @@ MOVE_WINDOW_MINUTES = 60    # ...within the last hour
 MOVER_MAX_SPREAD = 0.05     # ignore markets with wide spreads (moves there are noise)
 MOVER_MIN_LIQUIDITY = 1_000
 VOL_SPIKE_USD = 10_000      # flag if 24h volume jumps by this much within the window
-PRICE_HISTORY_HOURS = float(os.getenv("POLYBOT_PRICE_HISTORY_HOURS", "6"))  # cloud keeps 2 to stay small
+PRICE_HISTORY_HOURS = float(os.getenv("POLYBOT_PRICE_HISTORY_HOURS", "3"))  # cloud keeps 2 to stay small
 MOVER_COOLDOWN_HOURS = 6    # don't re-alert the same market for this long
+
+# =====================================================================
+#  SPORTS VALUE (Polymarket vs bookmakers)
+# =====================================================================
+# Bookmakers' combined odds (with their margin removed) are a sharp estimate of the true
+# chance. When Polymarket sells an outcome cheaper than that, buy it.
+# Free key at the-odds-api.com: 500 credits a month. Each sport costs 1 credit per check.
+ODDS_API_KEY = os.getenv("ODDS_API_KEY")
+ODDS_SPORTS = ["soccer_epl", "basketball_nba", "americanfootball_nfl"]
+ODDS_REGIONS = "eu"            # "eu" includes Pinnacle, the sharpest bookmaker
+ODDS_EVERY_MINUTES = int(os.getenv("POLYBOT_ODDS_EVERY", "360"))  # 3 sports x 4/day ~ 360 credits/month (free tier)
+ODDS_MIN_REMAINING = 15        # stop fetching when the monthly credits get this low
+ODDS_MAX_AGE_MINUTES = 540     # don't trade on odds older than this
+SPORTS_MIN_EDGE = 0.04         # Polymarket must be 4+ points cheaper than the bookmakers
+SPORTS_MIN_BOOKS = 3           # need at least this many bookmakers' prices
+SPORTS_MAX_GAP = 0.20          # bigger gap than this = probably matched the wrong game: skip
+SPORTS_MIN_MINUTES_BEFORE = 30 # only bet on games starting at least this far ahead
+SPORTS_STAKE = 5.0
+
+# =====================================================================
+#  MOMENTUM
+# =====================================================================
+FAST_MARKETS = 1000             # how many of the busiest markets to re-price every minute
+MOMENTUM_WINDOW_MINUTES = 15
+MOMENTUM_MIN_MOVE = 0.06        # 6+ point move in 15 min = buy in the direction of the move
+MOMENTUM_MIN_LIQUIDITY = 5_000
+MOMENTUM_MAX_SPREAD = 0.03
+MOMENTUM_STAKE = 5.0
+MOMENTUM_COOLDOWN_HOURS = 3     # one momentum trade per market per 3 hours
+
+# =====================================================================
+#  FAVOURITES
+# =====================================================================
+FAV_MIN_PRICE = 0.90
+FAV_MAX_PRICE = 0.97
+FAV_MAX_HOURS = 48              # market must resolve within 2 days
+FAV_MIN_LIQUIDITY = 5_000
+FAV_MAX_SPREAD = 0.02
+FAV_STAKE = 5.0
+FAV_MAX_NEW_PER_SCAN = 5
+
+# =====================================================================
+#  EXITS (selling before the market resolves)
+# =====================================================================
+# Price points per share. Strategies not listed hold until the market resolves.
+EXIT_RULES = {
+    "momentum": {"take_profit": 0.05, "stop_loss": 0.04, "max_hours": 6},
+}
 
 # =====================================================================
 #  RISK LIMITS (apply to paper AND live, so paper results are realistic)
@@ -128,10 +184,11 @@ BANKROLL = 1_000.0          # paper: starting cash. live: the most you're prepar
 KELLY_FRACTION = 0.25       # bet a quarter of the Kelly amount (full Kelly is far too aggressive)
 MIN_STAKE = 1.0
 MAX_STAKE = 10.0            # never more than this on one trade
-MAX_OPEN_POSITIONS = 50
-MAX_EXPOSURE = 500.0        # total money in open positions
-MAX_TRADES_PER_DAY = 30
-DAILY_LOSS_LIMIT = 50.0     # bot pauses itself if equity falls this much in a day (UTC)
+MAX_OPEN_POSITIONS = 200
+MAX_EXPOSURE = 900.0        # total money in open positions
+MAX_TRADES_PER_DAY = 200
+STRATEGY_MAX_OPEN = {"news": 50, "sports": 50, "momentum": 40, "favourites": 60}
+DAILY_LOSS_LIMIT = 100.0     # bot pauses itself if equity falls this much in a day (UTC)
 MIN_PRICE = 0.05            # never buy long shots below 5c
 MAX_PRICE = 0.99            # can buy favourites up to 99c (see HIGH_PRICE_ZONE above)
 
