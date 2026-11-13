@@ -56,6 +56,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           POLYBOT_MODE: paper
           POLYBOT_PAUSED: ${{ vars.POLYBOT_PAUSED }}
+          LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'auto' }}
           POLYBOT_MAX_NEWS_AGE: "60"
           POLYBOT_PRICE_HISTORY_HOURS: "2"
         run: python run.py cloud
