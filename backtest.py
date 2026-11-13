@@ -483,6 +483,24 @@ def print_summary(series, trades, train, test):
         print(f"{name:22} {fa:>22}   {fb:>22}   {verdict(b)[0]}")
 
 
+def print_details(series, trades, sweep_res):
+    print("\nDetails, all markets:")
+    for name, st in by_strategy(trades).items():
+        if st.get("n"):
+            print(f"  {name:22} {st['n']:5} trades  win {st['win_rate']:.0%}  avg entry {st['avg_entry']:.2f}  "
+                  f"avg win {st['avg_win']:+.2f}  avg loss {st['avg_loss']:+.2f}  PF {_fmt(st, 'profit_factor', 'pf')}  "
+                  f"return {st['roi']:+.1%}  ended: {st['reasons']}")
+    print("\nCalibration (24h before close): price range / markets / avg price / happened")
+    for c in calibration(series):
+        print(f"  {c['range']:8} {c['n']:4}  {c['avg_price']:.0%}  {c['happened']:.0%}")
+    if sweep_res:
+        for strat, res in sweep_res.items():
+            print(f"\nSweep - {strat}: settings / in-sample trades, P&L / unseen trades, P&L")
+            for r in res:
+                print(f"  {r['settings']:20} {r['train'].get('n', 0):5} {_fmt(r['train'], 'pnl', 'usd'):>10}   "
+                      f"{r['test'].get('n', 0):5} {_fmt(r['test'], 'pnl', 'usd'):>10}")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Backtest momentum + favourites on resolved Polymarket markets")
     ap.add_argument("--days", type=int, default=60)
@@ -501,6 +519,7 @@ def main(argv=None):
     train, test = split(series)
     sw = sweep(train, test) if a.sweep else None
     print_summary(series, trades, train, test)
+    print_details(series, trades, sw)
     path = write_report(series, trades, train, test, params, sw, a.out)
     print(f"\nFull report: {path}")
     if not a.no_open:
