@@ -290,6 +290,8 @@ fp = sports.fair_probs({"bookmakers": [{"key": k, "markets": [{"key": "h2h", "ou
 check(fp and fp[1] == 3 and abs(fp[0]["A"] - (1 / 1.6) / (1 / 1.6 + 1 / 2.5)) < 1e-9, "Pinnacle preferred")
 
 # ---------------- 14. Momentum + exits ----------------
+_old_mom, _old_fav = config.ENABLE_MOMENTUM, config.ENABLE_FAVOURITES
+config.ENABLE_MOMENTUM = config.ENABLE_FAVOURITES = True   # test them even when switched off in config
 dbm = DB(":memory:")
 fs = strategies.FastScan(dbm, Broker(dbm))
 def fm(id, bid, ask, liq=50000, end=None):
@@ -328,6 +330,8 @@ ff.run([fm(31, 0.94, 0.95, end=now + 10 * 3600),    # YES at 95c, resolves in 10
 config.ENABLE_MOMENTUM = True
 fav = {(p["market_id"], p["side"]) for p in dbf.open_positions()}
 check(fav == {("31", "YES"), ("33", "NO")}, f"favourites picks the right ones {fav}")
+
+config.ENABLE_MOMENTUM, config.ENABLE_FAVOURITES = _old_mom, _old_fav
 
 # ---------------- 16. Safety: paper-only strategies, caps, old databases ----------------
 class FakeLive:
