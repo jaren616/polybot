@@ -50,7 +50,7 @@ Without it, news alerts still show on the dashboard, but nothing is traded.
 
 | Key | Where to get it (free) | Default model |
 |---|---|---|
-| `GEMINI_API_KEY` | aistudio.google.com → Get API key (Google account, no card) | `gemini-2.5-flash` |
+| `GEMINI_API_KEY` | aistudio.google.com → Get API key (Google account, no card) | `gemini-3.8-flash` |
 | `GROQ_API_KEY` | console.groq.com → API Keys | `openai/gpt-oss-120b` |
 | `OPENROUTER_API_KEY` | openrouter.ai → Keys | `openai/gpt-oss-120b:free` |
 | `LLM_PROVIDER=ollama` | ollama.com, then `ollama pull llama3.1:8b` (runs on your PC, laptop only) | `llama3.1:8b` |

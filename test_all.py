@@ -388,7 +388,7 @@ item = news_feeds.NewsItem("z", "BBC", "Bank of England cuts rates", "u", time.t
 jj = ai_real.judge(item, mk_boe, 2)
 check(jj and abs(jj.prob_yes - 0.7) < 1e-9, "Gemini answer parsed")
 check(sent["url"] == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-      and sent["headers"]["Authorization"] == "Bearer m" and sent["body"]["model"] == "gemini-2.5-flash",
+      and sent["headers"]["Authorization"] == "Bearer m" and sent["body"]["model"] == "gemini-3.8-flash",
       "correct Gemini request")
 ai_real.requests.post = lambda url, headers, json, timeout: PR(429, {"error": "rate"})
 check(ai_real.judge(item, mk_boe, 2) is None and "rate limit" in ai_real.last_error, "429 handled")
@@ -397,6 +397,12 @@ check(ai_real.judge(item, mk_boe, 2) is None, "pauses AI for 5 minutes after a r
 ai_real._cooldown_until = 0
 ai_real.requests.post = lambda url, headers, json, timeout: PR(401, {"error": "bad key"})
 check(ai_real.judge(item, mk_boe, 2) is None and "401" in ai_real.last_error, "bad key handled")
+check(ai_real._cooldown_until > time.time() + 3000, "bad key/model pauses AI for an hour (saves the allowance)")
+ai_real.requests.post = lambda url, headers, json, timeout: PR(404, [{"error": {"code": 404, "message": "model gone"}}])
+ai_real._cooldown_until = 0
+ai_real.judge(item, mk_boe, 2)
+check("model gone" in ai_real.last_error, "provider's own error message is shown")
+ai_real._cooldown_until = 0
 # daily budget inside the news strategy
 ai_real.requests.post = fake_post
 os.environ["AI_MAX_CALLS_PER_DAY"] = "1"
@@ -408,7 +414,7 @@ ns7.run([news_feeds.NewsItem("b1", "BBC", "Bank of England interest rate cut sig
          news_feeds.NewsItem("b2", "BBC", "Bank of England interest rate cut confirmed soon", "u", time.time())])
 acts = [r["action"] for r in db7.q("SELECT action FROM signals ORDER BY id")]
 check(len(acts) == 2 and "daily limit" in acts[1], f"daily AI budget respected {acts}")
-check(json.loads(db7.q("SELECT data FROM signals ORDER BY id LIMIT 1")[0]["data"]).get("ai") == "gemini-2.5-flash",
+check(json.loads(db7.q("SELECT data FROM signals ORDER BY id LIMIT 1")[0]["data"]).get("ai") == "gemini-3.8-flash",
       "signal records which AI judged it")
 config.AI_MAX_CALLS_PER_DAY = None
 os.environ.pop("AI_MAX_CALLS_PER_DAY")

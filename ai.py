@@ -19,7 +19,7 @@ import config
 
 # provider: (key variable, OpenAI-compatible base URL, default model)
 PROVIDERS = {
-    "gemini": ("GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash"),
+    "gemini": ("GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.8-flash"),
     "groq": ("GROQ_API_KEY", "https://api.groq.com/openai/v1", "openai/gpt-oss-120b"),
     "openrouter": ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1", "openai/gpt-oss-120b:free"),
     "ollama": (None, "http://localhost:11434/v1", "llama3.1:8b"),
@@ -123,8 +123,15 @@ def _ask_openai_compatible(p, prompt) -> str | None:
         print(f"[ai] {last_error}")
         return None
     if r.status_code >= 400:
-        last_error = f"{p} error {r.status_code}: {r.text[:200]}"
+        try:  # pull out the provider's own message, e.g. "model X is no longer available"
+            msg = r.json()
+            msg = (msg[0] if isinstance(msg, list) else msg).get("error", {}).get("message", "")
+        except Exception:
+            msg = r.text
+        last_error = f"{p} error {r.status_code}: {str(msg)[:160]}"
         print(f"[ai] {last_error}")
+        if r.status_code in (401, 403, 404):  # bad key or model: retrying won't help, so stop
+            _cooldown_until = time.time() + 3600     # for an hour instead of burning the daily allowance
         return None
     choice = (r.json().get("choices") or [{}])[0]
     return (choice.get("message") or {}).get("content") or ""
