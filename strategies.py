@@ -72,7 +72,7 @@ class NewsStrategy:
                            "bid": fresh.best_bid, "ask": fresh.best_ask}
                 if j:
                     payload.update(p_yes=round(j.prob_yes, 3), conf=round(j.confidence, 2),
-                                   priced_in=j.already_priced_in, reason=j.reasoning, ai=ai.model_name())
+                                   priced_in=j.already_priced_in, reason=j.reasoning, ai=ai.judged_by or ai.model_name())
                 if j:
                     action = ""
                 elif over_budget:

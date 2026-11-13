@@ -24,8 +24,9 @@ PROVIDERS = {
     "openrouter": ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1", "openai/gpt-oss-120b:free"),
     "ollama": (None, "http://localhost:11434/v1", "llama3.1:8b"),
 }
-_cooldown_until = 0.0   # after a rate-limit error, pause AI calls for a few minutes
+_cooldown: dict[str, float] = {}   # provider -> time it can be used again (after errors)
 last_error = ""
+judged_by = None    # which model answered the last question
 
 
 def provider_name() -> str | None:
@@ -44,12 +45,26 @@ def provider_name() -> str | None:
     return None
 
 
-def model_name() -> str | None:
-    p = provider_name()
+def available() -> list[str]:
+    """The chosen provider first, then any others you have keys for (used as backups)."""
+    first = provider_name()
+    if not first:
+        return []
+    out = [first]
+    if config.ANTHROPIC_API_KEY and "anthropic" not in out:
+        out.append("anthropic")
+    for name, (key_var, _, _) in PROVIDERS.items():
+        if key_var and config.key(key_var) and name not in out:
+            out.append(name)
+    return out
+
+
+def model_name(p=None) -> str | None:
+    p = p or provider_name()
     if not p:
         return None
-    if config.LLM_MODEL_OVERRIDE:
-        return config.LLM_MODEL_OVERRIDE
+    if config.LLM_MODEL_OVERRIDE and p == provider_name():
+        return config.LLM_MODEL_OVERRIDE  # the override applies to your main provider only
     return config.LLM_MODEL if p == "anthropic" else PROVIDERS[p][2]
 
 
@@ -107,18 +122,18 @@ def _get_client():
 
 def _ask_openai_compatible(p, prompt) -> str | None:
     """Gemini, Groq, OpenRouter and Ollama all accept the same OpenAI-style request."""
-    global _cooldown_until, last_error
+    global last_error
     key_var, base, _ = PROVIDERS[p]
     headers = {"Content-Type": "application/json"}
     if key_var:
         headers["Authorization"] = f"Bearer {config.key(key_var)}"
     if p == "openrouter":
         headers["X-Title"] = "polybot"
-    body = {"model": model_name(), "temperature": 0, "max_tokens": 2000,
+    body = {"model": model_name(p), "temperature": 0, "max_tokens": 2000,
             "messages": [{"role": "user", "content": prompt}]}
-    r = requests.post(f"{base}/chat/completions", headers=headers, json=body, timeout=60)
+    r = requests.post(f"{base}/chat/completions", headers=headers, json=body, timeout=30)
     if r.status_code == 429:
-        _cooldown_until = time.time() + 300
+        _cooldown[p] = time.time() + 300
         last_error = f"{p} rate limit reached - pausing AI for 5 minutes"
         print(f"[ai] {last_error}")
         return None
@@ -131,34 +146,42 @@ def _ask_openai_compatible(p, prompt) -> str | None:
         last_error = f"{p} error {r.status_code}: {str(msg)[:160]}"
         print(f"[ai] {last_error}")
         if r.status_code in (401, 403, 404):  # bad key or model: retrying won't help, so stop
-            _cooldown_until = time.time() + 3600     # for an hour instead of burning the daily allowance
+            _cooldown[p] = time.time() + 3600        # for an hour instead of burning the daily allowance
+        elif r.status_code >= 500:                   # provider overloaded: give it a minute
+            _cooldown[p] = time.time() + 60
         return None
     choice = (r.json().get("choices") or [{}])[0]
     return (choice.get("message") or {}).get("content") or ""
 
 
 def judge(news, market, age_min: float) -> Judgement | None:
-    global last_error
-    p = provider_name()
-    if not p or time.time() < _cooldown_until:
-        return None
+    """Ask the main AI; if it's busy, down or rate-limited, try the backups in turn."""
+    global last_error, judged_by
     prompt = PROMPT.format(
         question=market.question, rules=market.description or "(none given)",
         end=market.end_date, price=market.yes_price, age=round(age_min),
         source=news.source, news=news.text)
-    try:
-        if p == "anthropic":
-            msg = _get_client().messages.create(
-                model=model_name(), max_tokens=4000,  # room for the model to think before it answers
-                messages=[{"role": "user", "content": prompt}])
-            # The reply can contain "thinking" blocks before the answer: only read the text blocks.
-            raw = "".join(getattr(b, "text", "") for b in msg.content if getattr(b, "type", "") == "text")
-        else:
-            raw = _ask_openai_compatible(p, prompt)
-    except Exception as e:  # bad key, no credit, network... don't crash the bot
-        last_error = f"{p} error: {e}"
-        print(f"[ai] {last_error}")
-        return None
+    raw = None
+    for p in available():
+        if time.time() < _cooldown.get(p, 0):
+            continue
+        try:
+            if p == "anthropic":
+                msg = _get_client().messages.create(
+                    model=model_name(p), max_tokens=4000,  # room for the model to think before it answers
+                    messages=[{"role": "user", "content": prompt}])
+                # The reply can contain "thinking" blocks before the answer: only read the text blocks.
+                raw = "".join(getattr(b, "text", "") for b in msg.content if getattr(b, "type", "") == "text")
+            else:
+                raw = _ask_openai_compatible(p, prompt)
+        except Exception as e:  # bad key, no credit, network, timeout... don't crash the bot
+            last_error = f"{p} error: {str(e)[:160]}"
+            print(f"[ai] {last_error}")
+            _cooldown[p] = time.time() + 60
+            raw = None
+        if raw:
+            judged_by = model_name(p)
+            break
     if not raw:
         return None
     m = re.search(r"\{.*\}", raw, re.S)

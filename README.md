@@ -55,7 +55,9 @@ Without it, news alerts still show on the dashboard, but nothing is traded.
 | `OPENROUTER_API_KEY` | openrouter.ai → Keys | `openai/gpt-oss-120b:free` |
 | `LLM_PROVIDER=ollama` | ollama.com, then `ollama pull llama3.1:8b` (runs on your PC, laptop only) | `llama3.1:8b` |
 
-Pick a different model with `LLM_MODEL`. Free tiers have daily limits, so the bot stops at 150 AI
+**Set more than one key and they back each other up:** if your main AI is busy, down, timing out
+or rate-limited, the bot asks the next one (e.g. Gemini first, Groq as backup). Pick a different
+model with `LLM_MODEL`. Free tiers have daily limits, so the bot stops at 150 AI
 checks a day (change with `AI_MAX_CALLS_PER_DAY`) and pauses 5 minutes if it's rate-limited.
 Free tiers may use your prompts to improve their products; the prompts are only public news and
 market questions. The dashboard shows which AI is in use and how many checks it's used today.

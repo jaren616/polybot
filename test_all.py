@@ -394,15 +394,37 @@ ai_real.requests.post = lambda url, headers, json, timeout: PR(429, {"error": "r
 check(ai_real.judge(item, mk_boe, 2) is None and "rate limit" in ai_real.last_error, "429 handled")
 ai_real.requests.post = fake_post
 check(ai_real.judge(item, mk_boe, 2) is None, "pauses AI for 5 minutes after a rate limit")
-ai_real._cooldown_until = 0
+ai_real._cooldown.clear()
 ai_real.requests.post = lambda url, headers, json, timeout: PR(401, {"error": "bad key"})
 check(ai_real.judge(item, mk_boe, 2) is None and "401" in ai_real.last_error, "bad key handled")
-check(ai_real._cooldown_until > time.time() + 3000, "bad key/model pauses AI for an hour (saves the allowance)")
+check(ai_real._cooldown["gemini"] > time.time() + 3000, "bad key/model pauses AI for an hour (saves the allowance)")
 ai_real.requests.post = lambda url, headers, json, timeout: PR(404, [{"error": {"code": 404, "message": "model gone"}}])
-ai_real._cooldown_until = 0
+ai_real._cooldown.clear()
 ai_real.judge(item, mk_boe, 2)
 check("model gone" in ai_real.last_error, "provider's own error message is shown")
-ai_real._cooldown_until = 0
+ai_real._cooldown.clear()
+# backup: Gemini overloaded (503) -> Groq answers
+os.environ["GROQ_API_KEY"] = "q"
+config.LLM_PROVIDER = "gemini"
+def busy_gemini(url, headers, json, timeout):
+    if "googleapis" in url:
+        return PR(503, [{"error": {"code": 503, "message": "high demand"}}])
+    return fake_post(url, headers, json, timeout)
+ai_real.requests.post = busy_gemini
+jj = ai_real.judge(item, mk_boe, 2)
+check(jj is not None and ai_real.judged_by == "openai/gpt-oss-120b" and "api.groq.com" in sent["url"],
+      "Gemini busy -> Groq answers instead")
+check(ai_real.available() == ["gemini", "groq"], "backup order: chosen first, then the rest")
+def timeout_gemini(url, headers, json, timeout):
+    if "googleapis" in url:
+        raise ai_real.requests.exceptions.ReadTimeout("read timed out")
+    return fake_post(url, headers, json, timeout)
+ai_real._cooldown.clear()
+ai_real.requests.post = timeout_gemini
+check(ai_real.judge(item, mk_boe, 2) is not None and ai_real.judged_by == "openai/gpt-oss-120b", "timeout -> backup")
+config.LLM_PROVIDER = "auto"
+os.environ.pop("GROQ_API_KEY")
+ai_real._cooldown.clear()
 # daily budget inside the news strategy
 ai_real.requests.post = fake_post
 os.environ["AI_MAX_CALLS_PER_DAY"] = "1"
@@ -419,7 +441,7 @@ check(json.loads(db7.q("SELECT data FROM signals ORDER BY id LIMIT 1")[0]["data"
 config.AI_MAX_CALLS_PER_DAY = None
 os.environ.pop("AI_MAX_CALLS_PER_DAY")
 for k in ("GEMINI_API_KEY", "GROQ_API_KEY"):
-    os.environ.pop(k)
+    os.environ.pop(k, None)
 config.ANTHROPIC_API_KEY = saved
 
 print(f"\n{ok} checks passed.\nALL TESTS PASSED")
