@@ -444,4 +444,32 @@ for k in ("GEMINI_API_KEY", "GROQ_API_KEY"):
     os.environ.pop(k, None)
 config.ANTHROPIC_API_KEY = saved
 
+# ---------------- 18. Reset ----------------
+dbr = DB(":memory:")
+Broker(dbr).buy(mk(60, "q", 0.39, 0.41), "YES", 0.65, "news")
+dbr.add_signal("news", "t", "d")
+dbr.set("odds_cache", {"ts": 1, "games": [], "remaining": 99})
+dbr.set("ai_calls_20261113", 42)
+dbr.snapshot_equity()
+dbr.reset("r1")
+check(not dbr.open_positions() and not dbr.q("SELECT * FROM signals") and dbr.money()["equity"] == config.BANKROLL,
+      "reset wipes trades and signals back to the bankroll")
+check(dbr.get("odds_cache")["remaining"] == 99 and dbr.get("ai_calls_20261113") == 42 and dbr.get("reset_marker") == "r1",
+      "reset keeps odds cache and today's AI count")
+import run as run_mod
+d = tempfile.mkdtemp(); cwd0 = os.getcwd(); os.chdir(d)
+dbx = DB(os.path.join(d, "x.db"))
+Broker(dbx).buy(mk(61, "q", 0.39, 0.41), "YES", 0.65, "news")
+with open("RESET", "w") as f:
+    f.write("2026-11-13 restart")
+run_mod.Engine = lambda db, broker: type("E", (), {"run_once": lambda self: None})()
+run_mod.cloud(dbx)
+dbx = DB(os.path.join(d, "x.db"))
+check(not dbx.open_positions() and dbx.get("reset_marker") == "2026-11-13 restart", "RESET file triggers a reset")
+Broker(dbx).buy(mk(62, "q", 0.39, 0.41), "YES", 0.65, "news")
+run_mod.cloud(dbx)
+dbx = DB(os.path.join(d, "x.db"))
+check(len(dbx.open_positions()) == 1, "same RESET text doesn't reset again")
+os.chdir(cwd0)
+
 print(f"\n{ok} checks passed.\nALL TESTS PASSED")

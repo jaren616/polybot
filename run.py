@@ -4,6 +4,8 @@
     py run.py once       one pass of every strategy, then exit (good for testing)
     py run.py resume     clear a pause (e.g. after the daily loss limit) without the dashboard
     py run.py cloud      (GitHub only) one pass of everything + write site/index.html
+    py run.py reset      wipe the paper account and start again at BANKROLL ($1,000)
+                         (on GitHub: change the text in the RESET file instead)
 """
 import os
 import sys
@@ -34,6 +36,12 @@ def cloud(db):
     if config.MODE != "paper":
         print("Cloud mode is paper-only. Refusing to run.")
         sys.exit(1)
+    # Changing the RESET file in the repository wipes the paper account on the next run.
+    if os.path.exists("RESET"):
+        with open("RESET", encoding="utf-8") as f:
+            marker = f.read().strip()
+        if marker and marker != db.get("reset_marker"):
+            db.reset(marker)
     paused = os.getenv("POLYBOT_PAUSED", "").strip().lower()
     if paused in ("true", "false"):
         db.set("paused", paused == "true")
@@ -56,6 +64,11 @@ def main():
         return
     if cmd == "cloud":
         return cloud(db)
+    if cmd == "reset":
+        if input(f"Wipe all paper trades and start again at ${config.BANKROLL:,.0f}? Type yes: ").strip().lower() == "yes":
+            db.reset()
+            print("Done.")
+        return
     broker = make_broker(db)
     engine = Engine(db, broker)
     if cmd == "once":

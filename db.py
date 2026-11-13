@@ -80,6 +80,18 @@ class DB:
     def paused(self) -> bool:
         return bool(self.get("paused", False))
 
+    def reset(self, marker=None):
+        """Start the paper account again at BANKROLL. Keeps cached bookmaker odds and
+        today's AI call count (so a reset can't blow through free-tier limits)."""
+        with self.lock:
+            for t in ("positions", "equity", "signals", "arbs", "prices", "logs", "seen"):
+                self.conn.execute(f"DELETE FROM {t}")
+            self.conn.execute("DELETE FROM state WHERE key NOT LIKE 'ai_calls_%' AND key != 'odds_cache'")
+            self.conn.commit()
+        if marker is not None:
+            self.set("reset_marker", marker)
+        self.log(f"Paper account reset to ${config.BANKROLL:,.0f}")
+
     # ---------- news dedupe ----------
     def seen(self, item_id) -> bool:
         if self.q("SELECT 1 FROM seen WHERE id=?", (item_id,)):

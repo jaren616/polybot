@@ -153,6 +153,8 @@ in the US, where Polymarket trading isn't allowed, and a private key must never 
 - **Pause / resume:** **Settings → Secrets and variables → Actions → Variables**, add
   `POLYBOT_PAUSED` = `true` to pause or `false` to resume.
 - **Run now:** **Actions → polybot → Run workflow**.
+- **Start again at $1,000:** edit the `RESET` file (any new text, e.g. today's date) and commit.
+  The next run wipes the paper account; bookmaker odds and today's AI call count are kept.
 - The database lives in GitHub's cache between runs, not in the repository, so trades stay
   out of the public code. If the bot doesn't run for 7 days the cache expires and history restarts.
 - Cloud runs use a 60-minute news window (runs are ~10 minutes apart and GitHub can start late).
