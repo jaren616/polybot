@@ -26,8 +26,8 @@ ENABLE_NEWS = True     # AI news trading (trades, paper or live)
 ENABLE_ARB = True      # arbitrage scanner (alerts + gap tracking, never auto-traded)
 ENABLE_MOVERS = True   # price-move / volume-spike alerts (alerts only)
 ENABLE_SPORTS = True      # sports value: Polymarket vs bookmaker odds (needs ODDS_API_KEY)
-ENABLE_MOMENTUM = True    # follow sharp price moves, exit on take-profit / stop-loss / time
-ENABLE_FAVOURITES = True  # buy 90-97c outcomes that resolve within 2 days
+ENABLE_MOMENTUM = False   # OFF: backtest lost money on all 12 settings tried (Nov 2026)
+ENABLE_FAVOURITES = False # OFF: backtest showed no edge after the spread (Nov 2026)
 
 # The high-volume strategies are PAPER ONLY: live mode refuses them. They buy and sell
 # far more often, and their exits (selling early) aren't built for real orders.
