@@ -1,5 +1,6 @@
 """Local browser dashboard at http://localhost:8765 (only reachable from this computer)."""
 import json
+import os
 import statistics
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -45,6 +46,7 @@ def state(db) -> dict:
                   "signals": sig_counts},
         "equity": [[r["ts"], r["equity"]] for r in eq] + [[time.time(), m["equity"]]],
         "by_strategy": db.strategy_stats(),
+        "backtest": os.path.exists("backtest.html") or os.path.exists(os.path.join("site_extra", "backtest.html")),
         "odds": {k: v for k, v in (db.get("odds_cache") or {}).items() if k != "games"},
         "odds_on": bool(config.ODDS_API_KEY),
         "open": [dict(p) for p in db.open_positions()],
@@ -87,6 +89,9 @@ def make_handler(db):
         def do_GET(self):
             if self.path in ("/", "/index.html"):
                 self._send(PAGE, "text/html")
+            elif self.path == "/backtest.html" and os.path.exists("backtest.html"):
+                with open("backtest.html", "rb") as f:
+                    self._send(f.read(), "text/html")
             elif self.path == "/api/state":
                 self._send(json.dumps(state(db), default=str))
             else:
@@ -173,7 +178,7 @@ svg text{fill:var(--mute);font-size:11px}
 <span class="sp"></span><span id="upd" class="muted small"></span><button id="toggle">Pause</button></header>
 <div id="banners"></div>
 <div class="kpis" id="kpis"></div>
-<div class="card"><h2>By strategy</h2><div class="tbl" id="strat"></div></div>
+<div class="card"><h2>By strategy <span class="sp"></span><a id="btlink" href="backtest.html" target="_blank" style="display:none;font-weight:500;font-size:13px">Backtest report &rarr;</a></h2><div class="tbl" id="strat"></div></div>
 <div class="grid"><div>
  <div class="card"><h2>Equity <span class="muted" id="eqsub"></span></h2><div id="chart"></div></div>
  <div class="card"><h2>Open positions <span class="muted" id="opensub"></span></h2><div class="tbl" id="open"></div></div>
@@ -217,6 +222,7 @@ function render(){
   ["Win rate",`${wr} <span class="small muted">${st.closed} closed</span>`,""],
   ["Brier (you vs mkt)",br,""],
  ].map(([k,v,c])=>`<div class="kpi"><span>${k}</span><b class="${c}">${v}</b></div>`).join("");
+ $("btlink").style.display=S.backtest?"":"none";
  const SN={news:"AI news",sports:"Sports value",momentum:"Momentum",favourites:"Favourites"};
  const bs=S.by_strategy||[];
  $("strat").innerHTML=bs.length?`<table><tr><th>Strategy</th><th class="r">Open</th><th class="r">Closed</th><th class="r">Win rate</th><th class="r">Staked</th><th class="r">Realised</th><th class="r">Unrealised</th><th class="r">Total</th></tr>`+

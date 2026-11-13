@@ -40,6 +40,13 @@ jobs:
           key: polybot-db-${{ github.run_id }}
           restore-keys: polybot-db-
 
+      - name: Load latest backtest report (if one exists)
+        uses: actions/cache/restore@v4
+        with:
+          path: site_extra
+          key: backtest-report-${{ github.run_id }}
+          restore-keys: backtest-report-
+
       - name: Run Polybot (paper)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -56,6 +63,9 @@ jobs:
         with:
           path: polybot_v2.db
           key: polybot-db-${{ github.run_id }}
+
+      - name: Add backtest report to the website
+        run: cp site_extra/backtest.html site/ 2>/dev/null || true
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

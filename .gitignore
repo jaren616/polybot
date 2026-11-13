@@ -5,3 +5,7 @@ __pycache__/
 site/
 arb_report.html
 .env
+backtest_cache/
+site_extra/
+backtest.html
+r.html

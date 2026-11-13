@@ -1,0 +1,50 @@
+name: backtest
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"     # every Monday ~04:17 UTC
+  workflow_dispatch:          # "Run workflow" button
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backtest
+  cancel-in-progress: false
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      # Downloaded price histories are kept between runs so each backtest only fetches new markets.
+      - name: Load downloaded price data
+        uses: actions/cache/restore@v4
+        with:
+          path: backtest_cache
+          key: backtest-data-${{ github.run_id }}
+          restore-keys: backtest-data-
+
+      - name: Run backtest
+        run: python backtest.py --days 60 --markets 400 --sweep --no-open --out site_extra/backtest.html
+
+      - name: Save price data
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: backtest_cache
+          key: backtest-data-${{ github.run_id }}
+
+      # The dashboard workflow picks this up and publishes it next to the dashboard.
+      - name: Save report for the website
+        uses: actions/cache/save@v4
+        with:
+          path: site_extra
+          key: backtest-report-${{ github.run_id }}

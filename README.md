@@ -107,7 +107,23 @@ Winnings from resolved markets are redeemed on polymarket.com.
 
 **Never** put your private key in a file, an email, a screenshot, or a GitHub repo.
 
-## 5. Running on GitHub (laptop can be off)
+## 5. Backtesting
+
+`py backtest.py` replays the **momentum** and **favourites** strategies on markets that already
+resolved (last 60 days, 300 busiest), paying a 1c spread on every buy and sell, and opens a report:
+
+- **In-sample vs unseen:** the older 70% of markets vs the newer 30%. Trust the unseen numbers.
+- **Momentum (reversed):** bets against every move. If it does as well, direction isn't the edge.
+- **Calibration table:** do outcomes priced at 90c really happen 90% of the time?
+- `py backtest.py --sweep` also tries other settings and shows how the best ones did on unseen markets.
+- `py backtest.py --offline` re-runs instantly on data already downloaded (in `backtest_cache/`).
+
+On GitHub it runs every Monday (or **Actions → backtest → Run workflow**), and the report appears at
+`https://<username>.github.io/<repository>/backtest.html`, linked from the dashboard.
+
+News and sports value can't be backtested this way (no historical headlines or bookmaker odds).
+
+## 6. Running on GitHub (laptop can be off)
 
 The `.github/workflows/polybot.yml` file runs one pass of everything every ~10 minutes on
 GitHub's servers and publishes the dashboard as a website. **Paper only**: GitHub's servers are
@@ -138,4 +154,5 @@ in the US, where Polymarket trading isn't allowed, and a private key must never 
 | `data.py`, `news_feeds.py`, `matcher.py`, `ai.py`, `arb_core.py` | Polymarket data, news, matching, Claude, arbitrage maths |
 | `db.py` | Storage (`polybot_v2.db`) |
 | `test_all.py` | Offline tests |
+| `backtest.py`, `test_backtest.py` | Backtester and its tests |
 | `.github/workflows/polybot.yml` | The GitHub schedule (section 5) |
