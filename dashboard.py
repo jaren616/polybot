@@ -5,6 +5,7 @@ import statistics
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import ai
 import config
 from db import day_start
 
@@ -37,7 +38,10 @@ def state(db) -> dict:
         "limits": {k: getattr(config, k) for k in (
             "BANKROLL", "MAX_STAKE", "MAX_EXPOSURE", "MAX_OPEN_POSITIONS", "MAX_TRADES_PER_DAY",
             "DAILY_LOSS_LIMIT", "KELLY_FRACTION", "MIN_EDGE", "MIN_EDGE_HIGH", "HIGH_PRICE_ZONE", "MAX_PRICE")},
-        "ai_on": bool(config.ANTHROPIC_API_KEY),
+        "ai_on": bool(ai.provider_name()),
+        "ai_model": ai.model_name(),
+        "ai_calls_today": db.get("ai_calls_" + time.strftime("%Y%m%d", time.gmtime()), 0),
+        "ai_limit": ai.daily_limit(),
         "money": m,
         "today_pnl": m["equity"] - db.equity_at(day_start()),
         "trades_today": db.trades_today(),
@@ -205,10 +209,11 @@ function render(){
  $("mode").textContent=S.mode.toUpperCase();$("mode").className="pill "+S.mode;
  $("run").textContent=S.paused?"PAUSED":"RUNNING";$("run").className="pill "+(S.paused?"pause":"run");
  $("toggle").textContent=S.paused?"Resume":"Pause";$("toggle").className=S.paused?"":"danger";
- $("upd").textContent=S.static?`cloud · last run ${ago(S.now)} · runs every ~10 min`:`news ${ago(S.last.last_news)} · scan ${ago(S.last.last_slow)}`;
+ const aiTxt=S.ai_on?` · AI ${S.ai_model} (${S.ai_calls_today}${S.ai_limit!=null?"/"+S.ai_limit:""} today)`:"";
+ $("upd").textContent=(S.static?`cloud · last run ${ago(S.now)} · runs every ~10 min`:`news ${ago(S.last.last_news)} · scan ${ago(S.last.last_slow)}`)+aiTxt;
  $("toggle").style.display=S.static?"none":"";
  let b="";
- if(!S.ai_on)b+=`<div class="banner warn">No ANTHROPIC_API_KEY set: news alerts appear, but the bot can't judge them, so it won't trade them.</div>`;
+ if(!S.ai_on)b+=`<div class="banner warn">No AI key set (Claude, Gemini, Groq or OpenRouter): news alerts appear, but the bot can't judge them, so it won't trade them.</div>`;
  if(S.paused)b+=`<div class="banner warn">Paused: no new trades. Scanning and alerts continue. ${S.static?"To resume, set the POLYBOT_PAUSED variable on GitHub to false.":"Press Resume to restart trading."}</div>`;
  if(S.mode==="live")b+=`<div class="banner bad">LIVE MODE: trades use real money${S.geo?` · connected from ${esc(S.geo.country||"?")}`:""}.</div>`;
  $("banners").innerHTML=b;

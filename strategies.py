@@ -56,7 +56,15 @@ class NewsStrategy:
                 continue
             for score, mk in self.matcher.candidates(item.text):
                 fresh = data.get_market(mk.id) or mk
-                j = ai.judge(item, fresh, age)
+                j, over_budget = None, False
+                if ai.provider_name():
+                    day_key = "ai_calls_" + time.strftime("%Y%m%d", time.gmtime())
+                    used, limit = self.db.get(day_key, 0), ai.daily_limit()
+                    if limit is not None and used >= limit:
+                        over_budget = True
+                    else:
+                        self.db.set(day_key, used + 1)
+                        j = ai.judge(item, fresh, age)
                 d = decide(j, fresh)
                 detail = item.text[:300]
                 payload = {"source": item.source, "news_url": item.url, "age_min": round(age),
@@ -64,11 +72,16 @@ class NewsStrategy:
                            "bid": fresh.best_bid, "ask": fresh.best_ask}
                 if j:
                     payload.update(p_yes=round(j.prob_yes, 3), conf=round(j.confidence, 2),
-                                   priced_in=j.already_priced_in, reason=j.reasoning)
-                sid = self.db.add_signal("news", fresh.question, detail, fresh.id, fresh.url, payload,
-                                         action="" if j else (
-                                             "AI didn't answer (check the API key / credit) - judge it yourself"
-                                             if config.ANTHROPIC_API_KEY else "no AI key - judge it yourself"))
+                                   priced_in=j.already_priced_in, reason=j.reasoning, ai=ai.model_name())
+                if j:
+                    action = ""
+                elif over_budget:
+                    action = "AI daily limit reached - judge it yourself"
+                elif ai.provider_name():
+                    action = f"AI didn't answer ({ai.last_error or 'check the key'}) - judge it yourself"
+                else:
+                    action = "no AI key - judge it yourself"
+                sid = self.db.add_signal("news", fresh.question, detail, fresh.id, fresh.url, payload, action=action)
                 n += 1
                 if d:
                     side, edge = d

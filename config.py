@@ -14,6 +14,15 @@ LIVE_CONFIRM_PHRASE = "I accept the risk"
 #  KEYS (read from environment variables, never typed into this file)
 # =====================================================================
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+# Free alternatives to Claude (see ai.py): GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY,
+# or LLM_PROVIDER=ollama for a model on your own computer. Read at call time via key().
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "auto")   # auto | anthropic | gemini | groq | openrouter | ollama
+LLM_MODEL_OVERRIDE = os.getenv("LLM_MODEL")        # e.g. "gemini-2.5-flash-lite" to pick another model
+AI_MAX_CALLS_PER_DAY = int(os.environ["AI_MAX_CALLS_PER_DAY"]) if os.getenv("AI_MAX_CALLS_PER_DAY") else None
+
+
+def key(name):
+    return os.getenv(name)
 X_BEARER_TOKEN = os.getenv("X_BEARER_TOKEN")
 POLY_PRIVATE_KEY = os.getenv("POLY_PRIVATE_KEY")        # live only
 POLY_FUNDER = os.getenv("POLY_FUNDER")                  # live only: your Polymarket wallet address
@@ -107,7 +116,7 @@ MAX_CANDIDATES_PER_ITEM = 3
 MIN_MATCH_SCORE = 6.0
 MIN_SHARED_WORDS = 2
 MAX_NEWS_AGE_MINUTES = int(os.getenv("POLYBOT_MAX_NEWS_AGE", "30"))  # cloud uses 60 (runs are ~10 min apart)
-LLM_MODEL = "claude-haiku-5-5"   # cheap + fast; "claude-sonnet-5-5" is smarter but ~3x the cost
+LLM_MODEL = "claude-haiku-5-5"   # Claude model if using ANTHROPIC_API_KEY (free providers have their own defaults)
 MIN_LLM_CONFIDENCE = 0.6
 MIN_EDGE = 0.07                  # estimate must beat the price by 7 points
 

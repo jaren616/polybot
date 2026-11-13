@@ -46,6 +46,20 @@ py run.py
 
 Without it, news alerts still show on the dashboard, but nothing is traded.
 
+**Free alternatives to Claude:** set any one of these instead (the bot uses the first it finds):
+
+| Key | Where to get it (free) | Default model |
+|---|---|---|
+| `GEMINI_API_KEY` | aistudio.google.com → Get API key (Google account, no card) | `gemini-2.5-flash` |
+| `GROQ_API_KEY` | console.groq.com → API Keys | `openai/gpt-oss-120b` |
+| `OPENROUTER_API_KEY` | openrouter.ai → Keys | `openai/gpt-oss-120b:free` |
+| `LLM_PROVIDER=ollama` | ollama.com, then `ollama pull llama3.1:8b` (runs on your PC, laptop only) | `llama3.1:8b` |
+
+Pick a different model with `LLM_MODEL`. Free tiers have daily limits, so the bot stops at 150 AI
+checks a day (change with `AI_MAX_CALLS_PER_DAY`) and pauses 5 minutes if it's rate-limited.
+Free tiers may use your prompts to improve their products; the prompts are only public news and
+market questions. The dashboard shows which AI is in use and how many checks it's used today.
+
 ## 2. The dashboard
 
 - **Top row:** equity, today's P&L, total P&L, open positions, win rate, and **Brier score vs the market**.
@@ -130,7 +144,8 @@ GitHub's servers and publishes the dashboard as a website. **Paper only**: GitHu
 in the US, where Polymarket trading isn't allowed, and a private key must never go on GitHub.
 
 - **API keys:** repository **Settings → Secrets and variables → Actions → New repository secret**,
-  name `ANTHROPIC_API_KEY` (and `ODDS_API_KEY` for sports). Secrets are hidden, even in a public repository.
+  name `ANTHROPIC_API_KEY` or a free one (`GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`),
+  and `ODDS_API_KEY` for sports. Secrets are hidden, even in a public repository.
 - **Website:** **Settings → Pages → Source: GitHub Actions**. The dashboard appears at
   `https://<username>.github.io/<repository>/` and refreshes every 2 minutes.
 - **Pause / resume:** **Settings → Secrets and variables → Actions → Variables**, add

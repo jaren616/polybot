@@ -356,4 +356,64 @@ check(dbo.open_positions()[0]["label"] is None and len(dbo.strategy_stats()) == 
 st3 = dashboard.state(dbm)
 check(any(r["strategy"] == "momentum" for r in st3["by_strategy"]), "dashboard strategy breakdown")
 
+# ---------------- 17. Free AI providers ----------------
+import importlib
+ai_real = importlib.reload(ai)   # earlier sections replaced ai.judge with a fake
+strategies.ai = ai_real
+saved = config.ANTHROPIC_API_KEY
+config.ANTHROPIC_API_KEY = None
+for k in ("GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY"):
+    os.environ.pop(k, None)
+check(ai_real.provider_name() is None, "no key -> no AI")
+os.environ["GROQ_API_KEY"] = "g"
+check(ai_real.provider_name() == "groq" and ai_real.model_name() == "openai/gpt-oss-120b", "Groq picked up")
+os.environ["GEMINI_API_KEY"] = "m"
+check(ai_real.provider_name() == "gemini", "Gemini preferred over Groq when both set")
+config.LLM_PROVIDER = "groq"
+check(ai_real.provider_name() == "groq", "LLM_PROVIDER forces a choice")
+config.LLM_PROVIDER = "ollama"
+check(ai_real.provider_name() == "ollama", "Ollama needs no key")
+config.LLM_PROVIDER = "auto"
+check(ai_real.daily_limit() == 150, "free tiers capped at 150 calls/day by default")
+sent = {}
+class PR:
+    def __init__(s, code, body): s.status_code, s._b, s.text = code, body, json.dumps(body)
+    def json(s): return s._b
+def fake_post(url, headers, json, timeout):
+    sent.update(url=url, headers=headers, body=json)
+    return PR(200, {"choices": [{"message": {"content": 'Sure: {"relevant": true, "prob_yes": 0.7, "confidence": 0.8, '
+                                              '"already_priced_in": false, "reasoning": "big news"}'}}]})
+ai_real.requests.post = fake_post
+item = news_feeds.NewsItem("z", "BBC", "Bank of England cuts rates", "u", time.time())
+jj = ai_real.judge(item, mk_boe, 2)
+check(jj and abs(jj.prob_yes - 0.7) < 1e-9, "Gemini answer parsed")
+check(sent["url"] == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+      and sent["headers"]["Authorization"] == "Bearer m" and sent["body"]["model"] == "gemini-2.5-flash",
+      "correct Gemini request")
+ai_real.requests.post = lambda url, headers, json, timeout: PR(429, {"error": "rate"})
+check(ai_real.judge(item, mk_boe, 2) is None and "rate limit" in ai_real.last_error, "429 handled")
+ai_real.requests.post = fake_post
+check(ai_real.judge(item, mk_boe, 2) is None, "pauses AI for 5 minutes after a rate limit")
+ai_real._cooldown_until = 0
+ai_real.requests.post = lambda url, headers, json, timeout: PR(401, {"error": "bad key"})
+check(ai_real.judge(item, mk_boe, 2) is None and "401" in ai_real.last_error, "bad key handled")
+# daily budget inside the news strategy
+ai_real.requests.post = fake_post
+os.environ["AI_MAX_CALLS_PER_DAY"] = "1"
+config.AI_MAX_CALLS_PER_DAY = 1
+db7 = DB(":memory:")
+ns7 = strategies.NewsStrategy(db7, Broker(db7))
+data.load_active_markets = lambda n=None: [mk_boe, mk(12, "Will Arsenal win the Premier League?", 0.3, 0.32)]
+ns7.run([news_feeds.NewsItem("b1", "BBC", "Bank of England interest rate cut signalled", "u", time.time()),
+         news_feeds.NewsItem("b2", "BBC", "Bank of England interest rate cut confirmed soon", "u", time.time())])
+acts = [r["action"] for r in db7.q("SELECT action FROM signals ORDER BY id")]
+check(len(acts) == 2 and "daily limit" in acts[1], f"daily AI budget respected {acts}")
+check(json.loads(db7.q("SELECT data FROM signals ORDER BY id LIMIT 1")[0]["data"]).get("ai") == "gemini-2.5-flash",
+      "signal records which AI judged it")
+config.AI_MAX_CALLS_PER_DAY = None
+os.environ.pop("AI_MAX_CALLS_PER_DAY")
+for k in ("GEMINI_API_KEY", "GROQ_API_KEY"):
+    os.environ.pop(k)
+config.ANTHROPIC_API_KEY = saved
+
 print(f"\n{ok} checks passed.\nALL TESTS PASSED")
