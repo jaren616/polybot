@@ -72,7 +72,7 @@ def daily_limit() -> int | None:
     """Free tiers have daily caps: stay under them. None = no cap."""
     if config.AI_MAX_CALLS_PER_DAY is not None:
         return config.AI_MAX_CALLS_PER_DAY
-    return None if provider_name() == "anthropic" else 150
+    return None if provider_name() == "anthropic" else 300
 
 PROMPT = """You are a careful prediction-market analyst.
 

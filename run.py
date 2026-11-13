@@ -45,7 +45,16 @@ def cloud(db):
     paused = os.getenv("POLYBOT_PAUSED", "").strip().lower()
     if paused in ("true", "false"):
         db.set("paused", paused == "true")
-    Engine(db, Broker(db)).run_once()
+    engine = Engine(db, Broker(db))
+    engine.run_once()
+    # Keep working for a while instead of one quick pass (GitHub only starts runs every
+    # 30-60 min, so a single pass would miss most news). Each strategy runs on its own timer.
+    minutes = float(os.getenv("POLYBOT_LOOP_MINUTES", "0"))
+    end = time.time() + minutes * 60
+    while time.time() < end:
+        time.sleep(15)
+        engine.fast_tick()
+        engine.slow_tick()
     from dashboard import export_static
     print("Dashboard written to", export_static(db))
     with db.lock:  # fold the write-ahead log into the main file before GitHub saves it

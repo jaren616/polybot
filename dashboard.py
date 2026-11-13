@@ -210,7 +210,7 @@ function render(){
  $("run").textContent=S.paused?"PAUSED":"RUNNING";$("run").className="pill "+(S.paused?"pause":"run");
  $("toggle").textContent=S.paused?"Resume":"Pause";$("toggle").className=S.paused?"":"danger";
  const aiTxt=S.ai_on?` · AI ${S.ai_model} (${S.ai_calls_today}${S.ai_limit!=null?"/"+S.ai_limit:""} today)`:"";
- $("upd").textContent=(S.static?`cloud · last run ${ago(S.now)} · runs every ~10 min`:`news ${ago(S.last.last_news)} · scan ${ago(S.last.last_slow)}`)+aiTxt;
+ $("upd").textContent=(S.static?`cloud · updated ${ago(S.now)} · trades continuously, page updates every ~30 min`:`news ${ago(S.last.last_news)} · scan ${ago(S.last.last_slow)}`)+aiTxt;
  $("toggle").style.display=S.static?"none":"";
  let b="";
  if(!S.ai_on)b+=`<div class="banner warn">No AI key set (Claude, Gemini, Groq or OpenRouter): news alerts appear, but the bot can't judge them, so it won't trade them.</div>`;

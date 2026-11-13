@@ -2,7 +2,7 @@ name: polybot
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # every 10 minutes (GitHub may start it a few minutes late)
+    - cron: "*/30 * * * *"   # a new run every 30 min; each one keeps working for 25 min
   workflow_dispatch:          # "Run workflow" button for testing
 
 permissions:
@@ -17,7 +17,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
@@ -59,6 +59,7 @@ jobs:
           LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'auto' }}
           POLYBOT_MAX_NEWS_AGE: "60"
           POLYBOT_PRICE_HISTORY_HOURS: "2"
+          POLYBOT_LOOP_MINUTES: "25"
         run: python run.py cloud
 
       - name: Save database for next run

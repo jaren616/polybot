@@ -182,8 +182,9 @@ check(strategies.decide(J(True, 0.96, 0.85, False, ""), fav) == ("YES", 0.96 - 0
 check(strategies.decide(J(True, 0.96, 0.70, False, ""), fav) is None, "high-prob needs 80% confidence")
 check(strategies.decide(J(True, 0.94, 0.90, False, ""), fav) is None, "1pt edge too small even at 90c+")
 mid = mk(21, "mid", 0.49, 0.51)
-check(strategies.decide(J(True, 0.54, 0.90, False, ""), mid) is None, "normal zone still needs 7 points")
+check(strategies.decide(J(True, 0.54, 0.90, False, ""), mid) is None, "normal zone still needs 5 points")
 check(strategies.decide(J(True, 0.59, 0.90, False, ""), mid)[0] == "YES", "normal zone 8pt edge trades")
+check(strategies.decide(J(True, 0.565, 0.90, False, ""), mid)[0] == "YES", "5.5pt edge now trades")
 longshot = mk(22, "ls", 0.06, 0.07)                 # NO costs 0.94
 d = strategies.decide(J(True, 0.02, 0.9, False, ""), longshot)
 check(d is not None and d[0] == "NO" and abs(d[1] - 0.04) < 1e-9, "NO on a long shot counts as high-prob")
@@ -374,7 +375,7 @@ check(ai_real.provider_name() == "groq", "LLM_PROVIDER forces a choice")
 config.LLM_PROVIDER = "ollama"
 check(ai_real.provider_name() == "ollama", "Ollama needs no key")
 config.LLM_PROVIDER = "auto"
-check(ai_real.daily_limit() == 150, "free tiers capped at 150 calls/day by default")
+check(ai_real.daily_limit() == 300, "free tiers capped at 300 calls/day by default")
 sent = {}
 class PR:
     def __init__(s, code, body): s.status_code, s._b, s.text = code, body, json.dumps(body)
@@ -470,6 +471,21 @@ Broker(dbx).buy(mk(62, "q", 0.39, 0.41), "YES", 0.65, "news")
 run_mod.cloud(dbx)
 dbx = DB(os.path.join(d, "x.db"))
 check(len(dbx.open_positions()) == 1, "same RESET text doesn't reset again")
+# loop mode keeps ticking until time runs out
+ticks = []
+class LoopE:
+    def run_once(self): ticks.append("once")
+    def fast_tick(self): ticks.append("fast")
+    def slow_tick(self): ticks.append("slow")
+run_mod.Engine = lambda db, broker: LoopE()
+real_sleep = run_mod.time.sleep
+run_mod.time.sleep = lambda s: None
+os.environ["POLYBOT_LOOP_MINUTES"] = "0.001"
+t_end = time.time() + 0.2
+run_mod.cloud(DB(os.path.join(d, "y.db")))
+os.environ.pop("POLYBOT_LOOP_MINUTES")
+run_mod.time.sleep = real_sleep
+check(ticks[0] == "once" and "fast" in ticks and "slow" in ticks, "loop mode keeps running the strategies")
 os.chdir(cwd0)
 
 print(f"\n{ok} checks passed.\nALL TESTS PASSED")

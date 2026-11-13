@@ -106,19 +106,19 @@ X_MAX_RESULTS_PER_ACCOUNT = 5
 GAMMA_URL = "https://gamma-api.polymarket.com"
 CLOB_URL = "https://clob.polymarket.com"
 GEOBLOCK_URL = "https://polymarket.com/api/geoblock"
-MARKETS_TO_LOAD = 1000          # more markets = more chances a story matches
+MARKETS_TO_LOAD = 1500          # more markets = more chances a story matches
 MIN_MARKET_LIQUIDITY = 1_000
 
 # =====================================================================
 #  NEWS STRATEGY
 # =====================================================================
-MAX_CANDIDATES_PER_ITEM = 3
+MAX_CANDIDATES_PER_ITEM = 5     # markets the AI checks per story
 MIN_MATCH_SCORE = 6.0
 MIN_SHARED_WORDS = 2
 MAX_NEWS_AGE_MINUTES = int(os.getenv("POLYBOT_MAX_NEWS_AGE", "30"))  # cloud uses 60 (runs are ~10 min apart)
 LLM_MODEL = "claude-haiku-5-5"   # Claude model if using ANTHROPIC_API_KEY (free providers have their own defaults)
-MIN_LLM_CONFIDENCE = 0.6
-MIN_EDGE = 0.07                  # estimate must beat the price by 7 points
+MIN_LLM_CONFIDENCE = 0.55
+MIN_EDGE = 0.05                  # estimate must beat the price by 5 points (was 7: more trades)
 
 # High-probability trades (buying at 90c+, e.g. a favourite, or NO on a long shot).
 # A 7-point edge is impossible up there, so they use a smaller edge - but need more
@@ -145,12 +145,13 @@ MOVER_COOLDOWN_HOURS = 6    # don't re-alert the same market for this long
 # chance. When Polymarket sells an outcome cheaper than that, buy it.
 # Free key at the-odds-api.com: 500 credits a month. Each sport costs 1 credit per check.
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
-ODDS_SPORTS = ["soccer_epl", "basketball_nba", "americanfootball_nfl"]
+ODDS_SPORTS = ["soccer_epl", "soccer_uefa_champs_league", "basketball_nba",
+               "americanfootball_nfl", "icehockey_nhl"]
 ODDS_REGIONS = "eu"            # "eu" includes Pinnacle, the sharpest bookmaker
-ODDS_EVERY_MINUTES = int(os.getenv("POLYBOT_ODDS_EVERY", "360"))  # 3 sports x 4/day ~ 360 credits/month (free tier)
+ODDS_EVERY_MINUTES = int(os.getenv("POLYBOT_ODDS_EVERY", "480"))  # 5 sports x 3/day ~ 450 credits/month (free tier)
 ODDS_MIN_REMAINING = 15        # stop fetching when the monthly credits get this low
 ODDS_MAX_AGE_MINUTES = 540     # don't trade on odds older than this
-SPORTS_MIN_EDGE = 0.04         # Polymarket must be 4+ points cheaper than the bookmakers
+SPORTS_MIN_EDGE = 0.03         # Polymarket must be 3+ points cheaper than the bookmakers
 SPORTS_MIN_BOOKS = 3           # need at least this many bookmakers' prices
 SPORTS_MAX_GAP = 0.20          # bigger gap than this = probably matched the wrong game: skip
 SPORTS_MIN_MINUTES_BEFORE = 30 # only bet on games starting at least this far ahead
@@ -196,7 +197,7 @@ MAX_STAKE = 10.0            # never more than this on one trade
 MAX_OPEN_POSITIONS = 200
 MAX_EXPOSURE = 900.0        # total money in open positions
 MAX_TRADES_PER_DAY = 200
-STRATEGY_MAX_OPEN = {"news": 50, "sports": 50, "momentum": 40, "favourites": 60}
+STRATEGY_MAX_OPEN = {"news": 100, "sports": 80, "momentum": 40, "favourites": 60}
 DAILY_LOSS_LIMIT = 100.0     # bot pauses itself if equity falls this much in a day (UTC)
 MIN_PRICE = 0.05            # never buy long shots below 5c
 MAX_PRICE = 0.99            # can buy favourites up to 99c (see HIGH_PRICE_ZONE above)
