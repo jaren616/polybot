@@ -53,7 +53,10 @@ Run both test files before every push. Tests are offline (all network calls are 
 - **Crypto value ON, weekdays only (14 Nov)**: `crypto_backtest.py` (21 days, 924 BTC/ETH above/range markets):
   model Brier 0.127 vs market 0.130, +17% per $ over 239 trades with 7-day realised vol (beat Deribit DVOL);
   weekdays +24%, weekends -13%, first half of the period only break-even. "Reach/dip" markets off (not backtested).
-  Re-run the backtest after a few weeks; turn it off if live paper results disagree.
+  100-day re-run (Aug-Nov, 4,423 markets): weekdays +22% per $ over 920 trades, every month positive
+  (Aug +19, Sep +15, Oct +20, Nov +46%), 10 of 15 weeks up, beat 100% of 1,000 random-trade sets;
+  weekends -12% again. DVOL did slightly better on weekdays (+29%) but is BTC/ETH-only: possible later tweak.
+  Re-run (`python crypto_backtest.py 100`, ~25 min) every few weeks; turn it off if live paper results disagree.
 - Judge strategies by the dashboard's **By strategy** table and **Brier score vs market** after 50+ settled trades.
 
 - **News matching (14 Nov)**: one AI call per story with up to 12 keyword candidates (near-term markets

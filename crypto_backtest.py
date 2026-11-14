@@ -47,9 +47,16 @@ start = now - (DAYS + 9) * 86400
 spot_h, dvol_h = {}, {}
 for sym in ("BTC", "ETH"):
     spot_h[sym] = {int(c[0]): c[4] for c in crypto.candles(sym, start, now, 3600)}
-    r = S.get("https://www.deribit.com/api/v2/public/get_volatility_index_data", timeout=30, params={
-        "currency": sym, "resolution": 3600, "start_timestamp": int(start * 1000), "end_timestamp": int(now * 1000)})
-    dvol_h[sym] = {int(x[0] / 1000): x[4] / 100 for x in r.json()["result"]["data"]}
+    dvol_h[sym] = {}
+    for a in range(int(start), int(now), 900 * 3600):   # Deribit returns ~1000 points per request
+        try:
+            r = S.get("https://www.deribit.com/api/v2/public/get_volatility_index_data", timeout=30, params={
+                "currency": sym, "resolution": 3600, "start_timestamp": a * 1000,
+                "end_timestamp": min(a + 900 * 3600, int(now)) * 1000})
+            dvol_h[sym].update({int(x[0] / 1000): x[4] / 100 for x in r.json()["result"]["data"]})
+        except Exception:
+            pass
+    print(sym, len(spot_h[sym]), "hours of price,", len(dvol_h[sym]), "of DVOL", file=sys.stderr)
 
 
 def at(series, t):
@@ -75,8 +82,8 @@ for i, (m, spec, outcome) in enumerate(mk):
         t = m.end_ts - lead * 3600
         before = [p for ts, p in hist if ts <= t]
         s, v = at(spot_h[sym], t), at(dvol_h[sym], t)
-        if not before or not s or not v:
-            continue
+        if not before or not s:
+            continue   # (DVOL may be missing: the bot doesn't use it, so keep the row)
         h = int(t // 3600 * 3600) - 3600
         closes = [c for c in (spot_h[sym].get(h - k * 3600) for k in range(168, -1, -1)) if c]
 
@@ -88,10 +95,16 @@ for i, (m, spec, outcome) in enumerate(mk):
         T = lead * 3600 / crypto.YEAR
         rows.append({"lead": lead, "mkt": before[-1], "y": outcome, "wkend": time.gmtime(t).tm_wday >= 5, "coin": sym, "end": m.end_ts,
                      "models": {k: crypto.fair(spec, s, x, T) for k, x in vols.items() if x}})
+    if i % 250 == 0:
+        print(f"{i} / {len(mk)} markets", file=sys.stderr)
+if len(sys.argv) > 2:
+    json.dump(rows, open(sys.argv[2], "w"))   # optional: save the raw rows for more analysis
 
 
 def score(R, key, edge=0.04):
     R = [r for r in R if key in r["models"]]
+    if not R:
+        return 0, 0, 0, 0, 0, 0
     bm = statistics.mean((r["models"][key] - r["y"]) ** 2 for r in R)
     bk = statistics.mean((r["mkt"] - r["y"]) ** 2 for r in R)
     pnl = n = w = 0
@@ -115,19 +128,65 @@ for lead in LEADS + ["all"]:
 
 print("=== robustness (all lead times, price 0.02-0.98) ===")
 R = [r for r in rows if 0.02 < r["mkt"] < 0.98]
-mid = sorted(r["end"] for r in R)[len(R) // 2]
-for name, sub in [("first half of period", [r for r in R if r["end"] < mid]), ("second half", [r for r in R if r["end"] >= mid]),
-                  ("BTC only", [r for r in R if r["coin"] == "BTC"]), ("ETH only", [r for r in R if r["coin"] == "ETH"]),
-                  ("weekend", [r for r in R if r["wkend"]]), ("weekday", [r for r in R if not r["wkend"]])]:
+months = sorted({time.strftime("%Y-%m", time.gmtime(r["end"])) for r in R})
+splits = [(f"month {mo}", [r for r in R if time.strftime("%Y-%m", time.gmtime(r["end"])) == mo]) for mo in months]
+splits += [("BTC only", [r for r in R if r["coin"] == "BTC"]), ("ETH only", [r for r in R if r["coin"] == "ETH"]),
+           ("weekend", [r for r in R if r["wkend"]]), ("weekday", [r for r in R if not r["wkend"]])]
+splits += [(f"weekday {mo}", [r for r in R if not r["wkend"] and time.strftime("%Y-%m", time.gmtime(r["end"])) == mo])
+           for mo in months]
+for name, sub in splits:
     for key in ("dvol", "rv168"):
         n_, bm, bk, n, w, ret = score(sub, key)
-        print(f"  {name:22} {key:6} n={n_:4} Brier {bm:.4f} vs mkt {bk:.4f} | {n:3} trades won {w:3} return/$ {ret:+.3f}")
-days = {}
-for r in R:
-    p = r["models"].get("rv168")
-    if p is None: continue
-    for fp, price, won in ((p, r["mkt"] + 0.01, r["y"] == 1), (1 - p, 1 - r["mkt"] + 0.01, r["y"] == 0)):
-        if fp - price >= 0.04 and 0.10 <= price <= 0.90:
-            d = time.strftime("%m-%d", time.gmtime(r["end"])); days.setdefault(d, []).append((1 / price if won else 0) - 1)
-print("  rv168 profit by settle day:", " ".join(f"{d}:{sum(v):+.1f}" for d, v in sorted(days.items())))
-print("  winning days", sum(sum(v) > 0 for v in days.values()), "of", len(days))
+        if n_:
+            print(f"  {name:22} {key:6} n={n_:4} Brier {bm:.4f} vs mkt {bk:.4f} | {n:3} trades won {w:3} return/$ {ret:+.3f}")
+
+
+def trades(sub, key="rv168", edge=0.04):
+    """(settle time, profit per $1) for each trade the rule would make."""
+    out = []
+    for r in sub:
+        p = r["models"].get(key)
+        if p is None:
+            continue
+        for fp, price, won in ((p, r["mkt"] + 0.01, r["y"] == 1), (1 - p, 1 - r["mkt"] + 0.01, r["y"] == 0)):
+            if fp - price >= edge and 0.10 <= price <= 0.90:
+                out.append((r["end"], (1 / price if won else 0) - 1))
+    return out
+
+
+bot = [r for r in R if not r["wkend"]]   # what the bot actually trades: weekdays, 7-day vol
+weeks = {}
+for t, x in trades(bot):
+    weeks.setdefault(time.strftime("%m-%d", time.gmtime(t - time.gmtime(t).tm_wday * 86400)), []).append(x)
+print("  bot rule (weekdays, rv168) profit per week ($1 bets):", " ".join(f"{w}:{sum(v):+.1f}" for w, v in sorted(weeks.items())))
+print("  winning weeks", sum(sum(v) > 0 for v in weeks.values()), "of", len(weeks))
+
+print("=== baselines (all lead times, price 0.02-0.98) ===")
+print(f"  Brier: always 50% 0.2500 | Polymarket {statistics.mean((r['mkt'] - r['y']) ** 2 for r in R):.4f} | "
+      f"model rv168 {statistics.mean((r['models']['rv168'] - r['y']) ** 2 for r in R if 'rv168' in r['models']):.4f}")
+import random
+random.seed(0)
+
+
+def simple(sub, pick):
+    xs = []
+    for r in sub:
+        side = pick(r)
+        price = (r["mkt"] if side == "YES" else 1 - r["mkt"]) + 0.01
+        if 0.10 <= price <= 0.90:
+            xs.append((1 / price if (r["y"] == 1) == (side == "YES") else 0) - 1)
+    return xs
+
+
+for name, pick in [("buy YES everywhere", lambda r: "YES"), ("buy NO everywhere", lambda r: "NO"),
+                   ("random side", lambda r: random.choice(["YES", "NO"])),
+                   ("buy the favourite", lambda r: "YES" if r["mkt"] >= 0.5 else "NO")]:
+    xs = simple(bot, pick)
+    print(f"  weekdays, {name:20} {len(xs):5} trades return/$ {statistics.mean(xs):+.3f}")
+bt = [x for _, x in trades(bot)]
+print(f"  weekdays, MODEL rule           {len(bt):5} trades return/$ {statistics.mean(bt):+.3f}" if bt else "  no model trades")
+if bt:
+    sims = sorted(statistics.mean(random.sample(simple(bot, lambda r: random.choice(["YES", "NO"])), len(bt)))
+                  for _ in range(1000))
+    print(f"  luck check: 1000 sets of {len(bt)} random trades -> median {sims[500]:+.3f}, best 5% {sims[950]:+.3f}; "
+          f"model beat {sum(s < statistics.mean(bt) for s in sims) / 10:.1f}% of them")
