@@ -115,7 +115,8 @@ def make_handler(db):
 
 
 def serve(db, port=None):
-    srv = ThreadingHTTPServer(("127.0.0.1", port or config.DASHBOARD_PORT), make_handler(db))
+    # port=0 means "any free port" (tests): `port or ...` would wrongly turn 0 into 8765.
+    srv = ThreadingHTTPServer(("127.0.0.1", config.DASHBOARD_PORT if port is None else port), make_handler(db))
     return srv
 
 

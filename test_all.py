@@ -99,29 +99,55 @@ mk_boe = mk(11, "Will the Bank of England cut interest rates in December 2026?",
 data.load_active_markets = lambda n=None: [mk_boe, mk(12, "Will Arsenal win the Premier League?", 0.3, 0.32)]
 data.get_market = lambda i: mk_boe if i == "11" else None
 real_judge_story = ai.judge_story
-ai.judge_story = lambda item, ms, age: (0, ai.Judgement(True, 0.65, 0.8, False, "strong signal"))
+ai.judge_story = lambda item, ms, age, **k: (0, ai.Judgement(True, 0.65, 0.8, False, "strong signal"))
 items = [news_feeds.NewsItem("a", "BBC", "Bank of England governor signals interest rate cut is imminent", "u", time.time() - 60),
          news_feeds.NewsItem("b", "BBC", "Rain expected tomorrow", "u", time.time() - 60),
          news_feeds.NewsItem("c", "BBC", "Bank of England rates old story", "u", time.time() - 7200)]
 check(ns.run(items) == 1, "one relevant fresh item -> one signal")
 check(ns.run(items) == 0, "dedupe on second pass")
 check(len(db3.open_positions()) == 1 and db3.open_positions()[0]["strategy"] == "news", "news trade placed")
-ai.judge_story = lambda item, ms, age: (0, ai.Judgement(True, 0.42, 0.9, True, "priced in"))
+# already holding the BoE market: it isn't shown to the AI again (saves the daily allowance)
+asked = []
+ai.judge_story = lambda item, ms, age, **k: asked.append(1) or (0, ai.Judgement(True, 0.65, 0.8, False, ""))
+ns.run([news_feeds.NewsItem("d0", "BBC", "Bank of England interest rate cut again", "u", time.time())])
+check(not asked, "held market skipped without an AI call")
+db3.x("DELETE FROM positions")
+ai.judge_story = lambda item, ms, age, **k: (0, ai.Judgement(True, 0.42, 0.9, True, "priced in"))
 ns.run([news_feeds.NewsItem("d", "BBC", "Bank of England interest rate cut talk continues", "u", time.time())])
 check("already priced in" in db3.q("SELECT action FROM signals ORDER BY id DESC LIMIT 1")[0]["action"], "priced-in recorded")
-ai.judge_story = lambda item, ms, age: (None, ai.Judgement(False, 0.5, 0.9, False, "none of these"))
+ai.judge_story = lambda item, ms, age, **k: (None, ai.Judgement(False, 0.5, 0.9, False, "none of these"))
 ns.run([news_feeds.NewsItem("e", "BBC", "Bank of England staff party photos", "u", time.time())])
 last = db3.q("SELECT * FROM signals ORDER BY id DESC LIMIT 1")[0]
 check(last["action"] == "no trade: no market affected" and last["title"].startswith("(no market)"), "AI can say no market fits")
+# price moves while the AI is thinking: re-check before buying
+seen_then = {}
+def judge_then(item, ms, age, prices_then=None):
+    seen_then.update(prices_then or {})
+    return 0, ai.Judgement(True, 0.47, 0.8, False, "")
+ai.judge_story = judge_then
+db3.add_prices([("11", 0.30, 0)], time.time() - 300)
+moved = mk(11, "Will the Bank of England cut interest rates in December 2026?", 0.44, 0.46)
+calls = iter([mk_boe, moved])
+data.get_market = lambda i: next(calls)
+ns.run([news_feeds.NewsItem("e2", "BBC", "Bank of England interest rate cut hint", "u", time.time() - 60)])
+check("price moved" in db3.q("SELECT action FROM signals ORDER BY id DESC LIMIT 1")[0]["action"]
+      and not db3.open_positions(), "no buy if the edge vanished while the AI judged")
+check(seen_then.get("11") == 0.30, "AI told the price from when the news came out")
+data.get_market = lambda i: mk_boe if i == "11" else None
+ns.run([news_feeds.NewsItem("e3", "BBC", "Bank of England interest rate cut hinted", "u", time.time() - 60)])
+check(len(db3.open_positions()) == 1, "buys when the price held still")
 # the AI sees all candidates in one call and its pick is used
 seen_prompts = []
 real_ask = ai._ask
 ai._ask = lambda prompt: (seen_prompts.append(prompt) or
                           '{"pick": 2, "prob_yes": 0.7, "confidence": 0.8, "already_priced_in": false, "reasoning": "x"}')
 cand = [mk(70, "Will A happen?", 0.4, 0.41), mk(71, "Will B happen?", 0.3, 0.31)]
-pk, jj = real_judge_story(news_feeds.NewsItem("f", "BBC", "B is happening", "u", time.time()), cand, 1)
+pk, jj = real_judge_story(news_feeds.NewsItem("f", "BBC", "B is happening", "u", time.time()), cand, 1,
+                          prices_then={"71": 0.20})
 check(pk == 1 and abs(jj.prob_yes - 0.7) < 1e-9 and "[1] Will A happen?" in seen_prompts[0]
       and "[2] Will B happen?" in seen_prompts[0], "one call shows every candidate; pick is 1-based")
+check("TODAY (UTC): " + time.strftime("%Y-%m-%d", time.gmtime()) in seen_prompts[0]
+      and "was 0.200 when the news came out" in seen_prompts[0], "prompt has today's date and the earlier price")
 ai._ask = lambda prompt: '{"pick": null, "confidence": 0.9, "reasoning": "nothing"}'
 check(real_judge_story(news_feeds.NewsItem("g", "BBC", "x", "u", time.time()), cand, 1)[0] is None, "null pick")
 ai._ask = lambda prompt: '{"pick": 9, "prob_yes": 0.7, "confidence": 0.8}'
@@ -391,6 +417,7 @@ ai_real = importlib.reload(ai)   # earlier sections replaced ai.judge with a fak
 strategies.ai = ai_real
 saved = config.ANTHROPIC_API_KEY
 config.ANTHROPIC_API_KEY = None
+config.LLM_PROVIDER, config.LLM_MODEL_OVERRIDE = "auto", None  # ignore this computer's own settings
 for k in ("GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY"):
     os.environ.pop(k, None)
 check(ai_real.provider_name() is None, "no key -> no AI")

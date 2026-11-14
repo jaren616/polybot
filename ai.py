@@ -209,6 +209,8 @@ def judge(news, market, age_min: float) -> Judgement | None:
 
 STORY_PROMPT = """You are a careful prediction-market analyst.
 
+TODAY (UTC): {today}
+
 NEW INFORMATION (published {age} minutes ago, source: {source}):
 {news}
 
@@ -222,22 +224,31 @@ Tasks:
 2. For the market you pick, give your probability that it resolves YES given this news.
 3. Be sceptical: rumours, opinion pieces, unverified single-source claims and news the market has
    probably already seen should not move you much. If the price likely already reflects it, say so.
-4. Only go above 0.97 or below 0.03 if the outcome is effectively settled.
+   If a market's price has already moved since the news came out, the market has probably reacted:
+   only disagree with it if you have a clear reason.
+4. Mind the deadline: something "likely eventually" can still be unlikely by the close date.
+5. Only go above 0.97 or below 0.03 if the outcome is effectively settled.
 
 Reply with ONLY a JSON object:
 {{"pick": <market number or null>, "prob_yes": 0.0-1.0, "confidence": 0.0-1.0,
   "already_priced_in": true/false, "reasoning": "one or two sentences"}}"""
 
 
-def judge_story(news, markets, age_min: float):
+def judge_story(news, markets, age_min: float, prices_then: dict | None = None):
     """Show the AI the story plus several candidate markets in ONE call; it picks the affected one.
+    prices_then = {market id: YES price around when the news came out} (shows if a market already reacted).
     Returns (index of the picked market or None, Judgement), or (None, None) if the AI didn't answer."""
+    now, prices_then = time.time(), prices_then or {}
     lines = []
     for i, mk in enumerate(markets, 1):
         rules = " ".join((mk.description or "").split())[:260]
-        lines.append(f"[{i}] {mk.question}\n    closes {mk.end_date or '?'} | YES price {mk.mid:.3f}"
+        left = f" (~{max(mk.end_ts - now, 0) / 86400:.1f} days left)" if mk.end_ts else ""
+        then = prices_then.get(mk.id)
+        moved = f" (was {then:.3f} when the news came out, {(mk.mid - then) * 100:+.1f} pts)" if then is not None else ""
+        lines.append(f"[{i}] {mk.question}\n    closes {mk.end_date or '?'}{left} | YES price {mk.mid:.3f}{moved}"
                      + (f"\n    rules: {rules}" if rules else ""))
-    raw = _ask(STORY_PROMPT.format(age=round(age_min), source=news.source, news=news.text,
+    raw = _ask(STORY_PROMPT.format(today=time.strftime("%Y-%m-%d %H:%M", time.gmtime(now)),
+                                   age=round(age_min), source=news.source, news=news.text,
                                    markets="\n".join(lines)))
     r = _parse(raw, 0.5)
     if not r:

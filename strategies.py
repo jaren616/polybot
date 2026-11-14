@@ -65,10 +65,16 @@ class NewsStrategy:
             age = (now - item.published_ts) / 60
             if age > config.MAX_NEWS_AGE_MINUTES:
                 continue
-            cands = self.shortlist(item.text, now)
+            # Already holding a market = can't buy it again, so don't show it to the AI.
+            cands = [c for c in self.shortlist(item.text, now) if not self.db.has_open(c[1].id)]
             if not cands:
                 continue
             markets = [mk for _, mk in cands]
+            # Prices saved around when the story came out (the 5-minute scan keeps ~2 hours of them).
+            then_ts, then_prices = self.db.prices_at_or_before(item.published_ts)
+            if then_ts is None or item.published_ts - then_ts > 15 * 60:
+                then_prices = {}
+            prices_then = {mk.id: then_prices[mk.id][0] for mk in markets if mk.id in then_prices}
             pick, j, over_budget = None, None, False
             if ai.provider_name():
                 day_key = "ai_calls_" + time.strftime("%Y%m%d", time.gmtime())
@@ -77,7 +83,7 @@ class NewsStrategy:
                     over_budget = True
                 else:
                     self.db.set(day_key, used + 1)
-                    pick, j = ai.judge_story(item, markets, age)
+                    pick, j = ai.judge_story(item, markets, age, prices_then=prices_then)
             payload = {"source": item.source, "news_url": item.url, "age_min": round(age),
                        "candidates": len(markets), "headline": item.text[:160]}
             if j:
@@ -103,12 +109,19 @@ class NewsStrategy:
             fresh = data.get_market(markets[pick].id) or markets[pick]
             payload.update(yes=round(fresh.mid, 3), bid=fresh.best_bid, ask=fresh.best_ask,
                            p_yes=round(j.prob_yes, 3), match=round(cands[pick][0], 1))
+            if fresh.id in prices_then:
+                payload["yes_then"] = round(prices_then[fresh.id], 3)
             sid = self.db.add_signal("news", fresh.question, item.text[:300], fresh.id, fresh.url, payload, action="")
             n += 1
             d = decide(j, fresh)
             if d:
-                side, edge = d
-                self.broker.buy(fresh, side, j.prob_yes, "news", signal_id=sid)
+                # The AI takes a few seconds: re-read the price and make sure the edge is still there.
+                latest = data.get_market(fresh.id) or fresh
+                d = decide(j, latest)
+                if d:
+                    self.broker.buy(latest, d[0], j.prob_yes, "news", signal_id=sid)
+                else:
+                    self.db.set_signal_action(sid, "no trade: price moved while the AI was judging")
             else:
                 self.db.set_signal_action(sid, "no trade: " + (
                     "already priced in" if j.already_priced_in else
