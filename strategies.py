@@ -44,6 +44,17 @@ class NewsStrategy:
             self.matcher, self.loaded_at = Matcher(markets), time.time()
             self.db.set("markets_loaded", len(markets))
 
+    def shortlist(self, text, now=None):
+        """Keyword matches, re-ranked so markets ending soon come first (news moves those most)."""
+        now = now or time.time()
+        out = []
+        for score, mk in self.matcher.candidates(text):
+            days = ((mk.end_ts or now + 365 * 86400) - now) / 86400
+            boost = 1.5 if days <= config.NEWS_PREFER_DAYS else 0.5 if days > 180 else 1.0
+            out.append((score * boost, mk))
+        out.sort(key=lambda x: -x[0])
+        return out[:config.MAX_CANDIDATES_PER_ITEM]
+
     def run(self, items=None):
         self.refresh()
         items = news_feeds.fetch_all() if items is None else items
@@ -54,43 +65,54 @@ class NewsStrategy:
             age = (now - item.published_ts) / 60
             if age > config.MAX_NEWS_AGE_MINUTES:
                 continue
-            for score, mk in self.matcher.candidates(item.text):
-                fresh = data.get_market(mk.id) or mk
-                j, over_budget = None, False
-                if ai.provider_name():
-                    day_key = "ai_calls_" + time.strftime("%Y%m%d", time.gmtime())
-                    used, limit = self.db.get(day_key, 0), ai.daily_limit()
-                    if limit is not None and used >= limit:
-                        over_budget = True
-                    else:
-                        self.db.set(day_key, used + 1)
-                        j = ai.judge(item, fresh, age)
-                d = decide(j, fresh)
-                detail = item.text[:300]
-                payload = {"source": item.source, "news_url": item.url, "age_min": round(age),
-                           "match": round(score, 1), "yes": round(fresh.mid, 3),
-                           "bid": fresh.best_bid, "ask": fresh.best_ask}
+            cands = self.shortlist(item.text, now)
+            if not cands:
+                continue
+            markets = [mk for _, mk in cands]
+            pick, j, over_budget = None, None, False
+            if ai.provider_name():
+                day_key = "ai_calls_" + time.strftime("%Y%m%d", time.gmtime())
+                used, limit = self.db.get(day_key, 0), ai.daily_limit()
+                if limit is not None and used >= limit:
+                    over_budget = True
+                else:
+                    self.db.set(day_key, used + 1)
+                    pick, j = ai.judge_story(item, markets, age)
+            payload = {"source": item.source, "news_url": item.url, "age_min": round(age),
+                       "candidates": len(markets), "headline": item.text[:160]}
+            if j:
+                payload.update(conf=round(j.confidence, 2), relevant=j.relevant, priced_in=j.already_priced_in,
+                               reason=j.reasoning, ai=ai.judged_by or ai.model_name())
+            if pick is None:
+                # No market picked: record it against the story (or the top keyword match if the AI is off).
+                top = markets[0]
                 if j:
-                    payload.update(p_yes=round(j.prob_yes, 3), conf=round(j.confidence, 2), relevant=j.relevant,
-                                   priced_in=j.already_priced_in, reason=j.reasoning, ai=ai.judged_by or ai.model_name())
-                if j:
-                    action = ""
+                    action = "no trade: no market affected"
                 elif over_budget:
                     action = "AI daily limit reached - judge it yourself"
                 elif ai.provider_name():
                     action = f"AI didn't answer ({ai.last_error or 'check the key'}) - judge it yourself"
                 else:
                     action = "no AI key - judge it yourself"
-                sid = self.db.add_signal("news", fresh.question, detail, fresh.id, fresh.url, payload, action=action)
+                title = top.question if not j else f"(no market) {item.text[:90]}"
+                payload.update(yes=round(top.mid, 3), bid=top.best_bid, ask=top.best_ask)
+                self.db.add_signal("news", title, item.text[:300], None if j else top.id,
+                                   item.url if j else top.url, payload, action=action)
                 n += 1
-                if d:
-                    side, edge = d
-                    self.broker.buy(fresh, side, j.prob_yes, "news", signal_id=sid)
-                elif j:
-                    self.db.set_signal_action(sid, "no trade: " + (
-                        "not relevant" if not j.relevant else
-                        "already priced in" if j.already_priced_in else
-                        "low confidence" if j.confidence < config.MIN_LLM_CONFIDENCE else "edge too small"))
+                continue
+            fresh = data.get_market(markets[pick].id) or markets[pick]
+            payload.update(yes=round(fresh.mid, 3), bid=fresh.best_bid, ask=fresh.best_ask,
+                           p_yes=round(j.prob_yes, 3), match=round(cands[pick][0], 1))
+            sid = self.db.add_signal("news", fresh.question, item.text[:300], fresh.id, fresh.url, payload, action="")
+            n += 1
+            d = decide(j, fresh)
+            if d:
+                side, edge = d
+                self.broker.buy(fresh, side, j.prob_yes, "news", signal_id=sid)
+            else:
+                self.db.set_signal_action(sid, "no trade: " + (
+                    "already priced in" if j.already_priced_in else
+                    "low confidence" if j.confidence < config.MIN_LLM_CONFIDENCE else "edge too small"))
         self.db.set("last_news", now)
         return n
 

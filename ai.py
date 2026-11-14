@@ -154,14 +154,9 @@ def _ask_openai_compatible(p, prompt) -> str | None:
     return (choice.get("message") or {}).get("content") or ""
 
 
-def judge(news, market, age_min: float) -> Judgement | None:
+def _ask(prompt) -> str | None:
     """Ask the main AI; if it's busy, down or rate-limited, try the backups in turn."""
     global last_error, judged_by
-    prompt = PROMPT.format(
-        question=market.question, rules=market.description or "(none given)",
-        end=market.end_date, price=market.yes_price, age=round(age_min),
-        source=news.source, news=news.text)
-    raw = None
     for p in available():
         if time.time() < _cooldown.get(p, 0):
             continue
@@ -181,20 +176,81 @@ def judge(news, market, age_min: float) -> Judgement | None:
             raw = None
         if raw:
             judged_by = model_name(p)
-            break
-    if not raw:
-        return None
-    m = re.search(r"\{.*\}", raw, re.S)
+            return raw
+    return None
+
+
+def _parse(raw, default_p) -> tuple[dict, Judgement] | None:
+    m = re.search(r"\{.*\}", raw or "", re.S)
     if not m:
         return None
     try:
         d = json.loads(m.group(0))
-        return Judgement(
-            relevant=bool(d.get("relevant")),
-            prob_yes=min(max(float(d.get("prob_yes", market.yes_price)), 0.0), 1.0),
-            confidence=min(max(float(d.get("confidence", 0)), 0.0), 1.0),
+        return d, Judgement(
+            relevant=bool(d.get("relevant", d.get("pick") is not None)),
+            prob_yes=min(max(float(d.get("prob_yes") if d.get("prob_yes") is not None else default_p), 0.0), 1.0),
+            confidence=min(max(float(d.get("confidence") or 0), 0.0), 1.0),
             already_priced_in=bool(d.get("already_priced_in")),
             reasoning=str(d.get("reasoning", ""))[:500],
         )
     except (ValueError, TypeError):
         return None
+
+
+def judge(news, market, age_min: float) -> Judgement | None:
+    """One story, one market (kept for tools and tests; the bot uses judge_story)."""
+    raw = _ask(PROMPT.format(
+        question=market.question, rules=market.description or "(none given)",
+        end=market.end_date, price=market.yes_price, age=round(age_min),
+        source=news.source, news=news.text))
+    r = _parse(raw, market.yes_price)
+    return r[1] if r else None
+
+
+STORY_PROMPT = """You are a careful prediction-market analyst.
+
+NEW INFORMATION (published {age} minutes ago, source: {source}):
+{news}
+
+CANDIDATE MARKETS (picked by keyword, so most are probably NOT affected):
+{markets}
+
+Tasks:
+1. Which ONE market does this news most directly change, under its exact rules and time frame?
+   A story about one game barely moves a season-long championship market; a story about a
+   person rarely changes a market about a different event. If none is clearly affected, pick null.
+2. For the market you pick, give your probability that it resolves YES given this news.
+3. Be sceptical: rumours, opinion pieces, unverified single-source claims and news the market has
+   probably already seen should not move you much. If the price likely already reflects it, say so.
+4. Only go above 0.97 or below 0.03 if the outcome is effectively settled.
+
+Reply with ONLY a JSON object:
+{{"pick": <market number or null>, "prob_yes": 0.0-1.0, "confidence": 0.0-1.0,
+  "already_priced_in": true/false, "reasoning": "one or two sentences"}}"""
+
+
+def judge_story(news, markets, age_min: float):
+    """Show the AI the story plus several candidate markets in ONE call; it picks the affected one.
+    Returns (index of the picked market or None, Judgement), or (None, None) if the AI didn't answer."""
+    lines = []
+    for i, mk in enumerate(markets, 1):
+        rules = " ".join((mk.description or "").split())[:260]
+        lines.append(f"[{i}] {mk.question}\n    closes {mk.end_date or '?'} | YES price {mk.mid:.3f}"
+                     + (f"\n    rules: {rules}" if rules else ""))
+    raw = _ask(STORY_PROMPT.format(age=round(age_min), source=news.source, news=news.text,
+                                   markets="\n".join(lines)))
+    r = _parse(raw, 0.5)
+    if not r:
+        return None, None
+    d, j = r
+    try:
+        pick = int(d.get("pick")) - 1 if d.get("pick") is not None else None
+    except (TypeError, ValueError):
+        pick = None
+    if pick is None or not (0 <= pick < len(markets)):
+        j.relevant = False
+        return None, j
+    if d.get("prob_yes") is None:
+        j.prob_yes = markets[pick].mid
+    j.relevant = True
+    return pick, j

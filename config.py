@@ -112,8 +112,9 @@ MIN_MARKET_LIQUIDITY = 1_000
 # =====================================================================
 #  NEWS STRATEGY
 # =====================================================================
-MAX_CANDIDATES_PER_ITEM = 5     # markets the AI checks per story
-MIN_MATCH_SCORE = 6.0
+MAX_CANDIDATES_PER_ITEM = 12    # markets shown to the AI per story (one AI call picks the right one)
+NEWS_PREFER_DAYS = 30           # markets ending within this many days are ranked first
+MIN_MATCH_SCORE = 4.0           # looser keyword match: the AI filters out the wrong ones
 MIN_SHARED_WORDS = 2
 MAX_NEWS_AGE_MINUTES = int(os.getenv("POLYBOT_MAX_NEWS_AGE", "30"))  # cloud uses 60 (runs are ~10 min apart)
 LLM_MODEL = "claude-haiku-5-5"   # Claude model if using ANTHROPIC_API_KEY (free providers have their own defaults)

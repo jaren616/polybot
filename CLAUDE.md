@@ -51,10 +51,12 @@ Run both test files before every push. Tests are offline (all network calls are 
   sports value (3-point edge vs bookmakers, needs ODDS_API_KEY), arbitrage + price-move alerts (alerts only).
 - Judge strategies by the dashboard's **By strategy** table and **Brier score vs market** after 50+ settled trades.
 
+- **News matching (14 Nov)**: one AI call per story with up to 12 keyword candidates (near-term markets
+  ranked first); the AI picks the affected market or none. Replaced one-call-per-market, after a
+  diagnostic showed every pick was "not relevant" (e.g. a single NBA game matched to 2027 Finals futures).
+
 ## Open items (Nov 2026)
-- No trades overnight 13-14 Nov: read the RUN SUMMARY in recent logs to see whether the AI marks stories
-  "already priced in", "not relevant", or finds no matches.
-- `ANTHROPIC_API_KEY` showed empty in runs after the owner said they added it: check the secret name.
+- Watch the RUN SUMMARY: how many stories get a market picked, and whether any reach the 5-point edge.
 - `ODDS_API_KEY` not added yet, so sports value is idle.
 - GitHub starts the 30-minute schedule late (runs roughly hourly).
 

@@ -98,16 +98,44 @@ ns = strategies.NewsStrategy(db3, b3)
 mk_boe = mk(11, "Will the Bank of England cut interest rates in December 2026?", 0.39, 0.41)
 data.load_active_markets = lambda n=None: [mk_boe, mk(12, "Will Arsenal win the Premier League?", 0.3, 0.32)]
 data.get_market = lambda i: mk_boe if i == "11" else None
-ai.judge = lambda item, m, age: ai.Judgement(True, 0.65, 0.8, False, "strong signal")
+real_judge_story = ai.judge_story
+ai.judge_story = lambda item, ms, age: (0, ai.Judgement(True, 0.65, 0.8, False, "strong signal"))
 items = [news_feeds.NewsItem("a", "BBC", "Bank of England governor signals interest rate cut is imminent", "u", time.time() - 60),
          news_feeds.NewsItem("b", "BBC", "Rain expected tomorrow", "u", time.time() - 60),
          news_feeds.NewsItem("c", "BBC", "Bank of England rates old story", "u", time.time() - 7200)]
 check(ns.run(items) == 1, "one relevant fresh item -> one signal")
 check(ns.run(items) == 0, "dedupe on second pass")
 check(len(db3.open_positions()) == 1 and db3.open_positions()[0]["strategy"] == "news", "news trade placed")
-ai.judge = lambda item, m, age: ai.Judgement(True, 0.42, 0.9, True, "priced in")
+ai.judge_story = lambda item, ms, age: (0, ai.Judgement(True, 0.42, 0.9, True, "priced in"))
 ns.run([news_feeds.NewsItem("d", "BBC", "Bank of England interest rate cut talk continues", "u", time.time())])
 check("already priced in" in db3.q("SELECT action FROM signals ORDER BY id DESC LIMIT 1")[0]["action"], "priced-in recorded")
+ai.judge_story = lambda item, ms, age: (None, ai.Judgement(False, 0.5, 0.9, False, "none of these"))
+ns.run([news_feeds.NewsItem("e", "BBC", "Bank of England staff party photos", "u", time.time())])
+last = db3.q("SELECT * FROM signals ORDER BY id DESC LIMIT 1")[0]
+check(last["action"] == "no trade: no market affected" and last["title"].startswith("(no market)"), "AI can say no market fits")
+# the AI sees all candidates in one call and its pick is used
+seen_prompts = []
+real_ask = ai._ask
+ai._ask = lambda prompt: (seen_prompts.append(prompt) or
+                          '{"pick": 2, "prob_yes": 0.7, "confidence": 0.8, "already_priced_in": false, "reasoning": "x"}')
+cand = [mk(70, "Will A happen?", 0.4, 0.41), mk(71, "Will B happen?", 0.3, 0.31)]
+pk, jj = real_judge_story(news_feeds.NewsItem("f", "BBC", "B is happening", "u", time.time()), cand, 1)
+check(pk == 1 and abs(jj.prob_yes - 0.7) < 1e-9 and "[1] Will A happen?" in seen_prompts[0]
+      and "[2] Will B happen?" in seen_prompts[0], "one call shows every candidate; pick is 1-based")
+ai._ask = lambda prompt: '{"pick": null, "confidence": 0.9, "reasoning": "nothing"}'
+check(real_judge_story(news_feeds.NewsItem("g", "BBC", "x", "u", time.time()), cand, 1)[0] is None, "null pick")
+ai._ask = lambda prompt: '{"pick": 9, "prob_yes": 0.7, "confidence": 0.8}'
+check(real_judge_story(news_feeds.NewsItem("h", "BBC", "x", "u", time.time()), cand, 1)[0] is None, "out-of-range pick ignored")
+ai._ask = lambda prompt: None
+check(real_judge_story(news_feeds.NewsItem("i", "BBC", "x", "u", time.time()), cand, 1) == (None, None), "no answer")
+ai._ask = real_ask
+# markets ending soon are shown first
+soon, late = mk(80, "Will the Fed cut rates in December?", 0.4, 0.41), mk(81, "Will the Fed cut rates in 2028?", 0.4, 0.41)
+soon.end_ts, late.end_ts = time.time() + 20 * 86400, time.time() + 600 * 86400
+ns2 = strategies.NewsStrategy(DB(":memory:"), Broker(DB(":memory:")))
+ns2.matcher = strategies.Matcher([late, soon] + [mk(82 + i, f"Will team {i} win the league?", 0.3, 0.31) for i in range(8)])
+sl = ns2.shortlist("Fed signals it will cut rates soon")
+check(sl and sl[0][1].id == "80", "near-term market ranked first")
 
 # ---------------- 6. Arbitrage + movers ----------------
 def ev_mk(id, q, bid, ask, title=None, vol=100, liq=1000, end="2026-12-31"):
