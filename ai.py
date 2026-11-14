@@ -20,6 +20,8 @@ import config
 # provider: (key variable, OpenAI-compatible base URL, default model)
 PROVIDERS = {
     "gemini": ("GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.8-flash"),
+    # Same key, lighter model: used when the main Gemini model is overloaded ("503 high demand").
+    "gemini-lite": ("GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-flash-lite-latest"),
     "groq": ("GROQ_API_KEY", "https://api.groq.com/openai/v1", "openai/gpt-oss-120b"),
     "openrouter": ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1", "openai/gpt-oss-120b:free"),
     "ollama": (None, "http://localhost:11434/v1", "llama3.1:8b"),

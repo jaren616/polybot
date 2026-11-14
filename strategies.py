@@ -37,6 +37,7 @@ class NewsStrategy:
     def __init__(self, db, broker):
         self.db, self.broker = db, broker
         self.matcher, self.loaded_at = None, 0.0
+        self.ai_fails = {}   # story id -> times the AI failed to answer (retried up to NEWS_AI_TRIES)
 
     def refresh(self):
         if time.time() - self.loaded_at > config.MARKETS_REFRESH_EVERY or not self.matcher:
@@ -84,6 +85,14 @@ class NewsStrategy:
                 else:
                     self.db.set(day_key, used + 1)
                     pick, j = ai.judge_story(item, markets, age, prices_then=prices_then)
+                    tries = self.ai_fails.get(item.id, 0) + 1
+                    if j is None and tries < config.NEWS_AI_TRIES:
+                        # AI busy or down (e.g. Gemini "high demand"): try this story again next pass,
+                        # and don't count the failed call against the daily allowance.
+                        self.ai_fails[item.id] = tries
+                        self.db.set(day_key, used)
+                        self.db.x("DELETE FROM seen WHERE id=?", (item.id,))
+                        continue
             payload = {"source": item.source, "news_url": item.url, "age_min": round(age),
                        "candidates": len(markets), "headline": item.text[:160]}
             if j:

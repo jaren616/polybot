@@ -116,6 +116,7 @@ MAX_CANDIDATES_PER_ITEM = 12    # markets shown to the AI per story (one AI call
 NEWS_PREFER_DAYS = 30           # markets ending within this many days are ranked first
 MIN_MATCH_SCORE = 4.0           # looser keyword match: the AI filters out the wrong ones
 MIN_SHARED_WORDS = 2
+NEWS_AI_TRIES = 3               # if the AI is busy/down, try a story up to 3 times (about a minute apart)
 MAX_NEWS_AGE_MINUTES = int(os.getenv("POLYBOT_MAX_NEWS_AGE", "30"))  # cloud uses 60 (runs are ~10 min apart)
 LLM_MODEL = "claude-haiku-5-5"   # Claude model if using ANTHROPIC_API_KEY (free providers have their own defaults)
 MIN_LLM_CONFIDENCE = 0.55

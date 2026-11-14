@@ -134,6 +134,21 @@ check("price moved" in db3.q("SELECT action FROM signals ORDER BY id DESC LIMIT 
       and not db3.open_positions(), "no buy if the edge vanished while the AI judged")
 check(seen_then.get("11") == 0.30, "AI told the price from when the news came out")
 data.get_market = lambda i: mk_boe if i == "11" else None
+# AI busy (e.g. Gemini 503): the story is retried next pass, failed calls don't use the allowance
+real_pn, ai.provider_name = ai.provider_name, lambda: "gemini"
+answers = iter([(None, None), (None, None), (None, ai.Judgement(False, 0.5, 0.9, False, "none"))])
+ai.judge_story = lambda item, ms, age, **k: next(answers)
+dk = "ai_calls_" + time.strftime("%Y%m%d", time.gmtime())
+used0 = db3.get(dk, 0)
+retry = [news_feeds.NewsItem("r1", "BBC", "Bank of England interest rate decision looms", "u", time.time() - 60)]
+ns.run(retry); ns.run(retry)
+check(db3.get(dk, 0) == used0 and not db3.q("SELECT 1 FROM signals WHERE title LIKE '%rate decision looms%'"),
+      "AI failure: story kept for retry, allowance not used")
+ns.run(retry)
+check("no market affected" in db3.q("SELECT action FROM signals ORDER BY id DESC LIMIT 1")[0]["action"]
+      and db3.get(dk, 0) == used0 + 1, "third try answered and recorded once")
+ai.provider_name = real_pn
+ai.judge_story = judge_then
 ns.run([news_feeds.NewsItem("e3", "BBC", "Bank of England interest rate cut hinted", "u", time.time() - 60)])
 check(len(db3.open_positions()) == 1, "buys when the price held still")
 # the AI sees all candidates in one call and its pick is used
@@ -471,7 +486,16 @@ ai_real.requests.post = busy_gemini
 jj = ai_real.judge(item, mk_boe, 2)
 check(jj is not None and ai_real.judged_by == "openai/gpt-oss-120b" and "api.groq.com" in sent["url"],
       "Gemini busy -> Groq answers instead")
-check(ai_real.available() == ["gemini", "groq"], "backup order: chosen first, then the rest")
+check(ai_real.available() == ["gemini", "gemini-lite", "groq"], "backup order: chosen first, then the rest")
+# only the main Gemini model busy -> the lite model on the same key answers
+ai_real._cooldown.clear()
+def busy_main(url, headers, json, timeout):
+    if json["model"] == "gemini-3.8-flash":
+        return PR(503, [{"error": {"code": 503, "message": "high demand"}}])
+    return fake_post(url, headers, json, timeout)
+ai_real.requests.post = busy_main
+jj = ai_real.judge(item, mk_boe, 2)
+check(jj is not None and ai_real.judged_by == "gemini-flash-lite-latest", "Gemini busy -> Gemini lite answers")
 def timeout_gemini(url, headers, json, timeout):
     if "googleapis" in url:
         raise ai_real.requests.exceptions.ReadTimeout("read timed out")
