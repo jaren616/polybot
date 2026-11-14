@@ -4,6 +4,10 @@ on:
   schedule:
     - cron: "*/30 * * * *"   # a new run every 30 min; each one keeps working for 25 min
   workflow_dispatch:          # "Run workflow" button for testing
+    inputs:
+      minutes:
+        description: "How long this run keeps trading (minutes)"
+        default: "25"
 
 permissions:
   contents: read
@@ -59,7 +63,7 @@ jobs:
           LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'auto' }}
           POLYBOT_MAX_NEWS_AGE: "60"
           POLYBOT_PRICE_HISTORY_HOURS: "2"
-          POLYBOT_LOOP_MINUTES: "25"
+          POLYBOT_LOOP_MINUTES: ${{ inputs.minutes || '25' }}
         run: python run.py cloud
 
       - name: Save database for next run

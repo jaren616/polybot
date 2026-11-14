@@ -71,7 +71,7 @@ class NewsStrategy:
                            "match": round(score, 1), "yes": round(fresh.mid, 3),
                            "bid": fresh.best_bid, "ask": fresh.best_ask}
                 if j:
-                    payload.update(p_yes=round(j.prob_yes, 3), conf=round(j.confidence, 2),
+                    payload.update(p_yes=round(j.prob_yes, 3), conf=round(j.confidence, 2), relevant=j.relevant,
                                    priced_in=j.already_priced_in, reason=j.reasoning, ai=ai.judged_by or ai.model_name())
                 if j:
                     action = ""

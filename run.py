@@ -7,6 +7,7 @@
     py run.py reset      wipe the paper account and start again at BANKROLL ($1,000)
                          (on GitHub: change the text in the RESET file instead)
 """
+import json
 import os
 import sys
 import threading
@@ -30,6 +31,44 @@ def make_broker(db):
     return Broker(db)
 
 
+def run_summary(db, since):
+    """Print what happened this run, so the GitHub log explains trades (or the lack of them)."""
+    import ai
+    rows = db.q("SELECT kind, action, data, title FROM signals WHERE ts>=?", (since,))
+    print(f"\n===== RUN SUMMARY =====")
+    print(f"AI: {', '.join(ai.available()) or 'none'} | AI checks today: "
+          f"{db.get('ai_calls_' + time.strftime('%Y%m%d', time.gmtime()), 0)}/{ai.daily_limit()}")
+    print(f"Markets loaded for news matching: {db.get('markets_loaded')} | news items seen so far: "
+          f"{db.q('SELECT COUNT(*) n FROM seen')[0]['n']}")
+    kinds = {}
+    for r in rows:
+        kinds[r["kind"]] = kinds.get(r["kind"], 0) + 1
+    print("Signals this run:", kinds or "none")
+    news = [r for r in rows if r["kind"] == "news"]
+    reasons = {}
+    for r in news:
+        a = r["action"] or "?"
+        key = a.split(" @")[0] if a.startswith(("paper", "live")) else a.split(" (")[0]
+        reasons[key] = reasons.get(key, 0) + 1
+    for k, v in sorted(reasons.items(), key=lambda x: -x[1]):
+        print(f"  news -> {k}: {v}")
+    near = []
+    for r in news:
+        d = json.loads(r["data"] or "{}")
+        if d.get("p_yes") is not None:
+            gap = max(d["p_yes"] - d.get("ask", 1), d.get("bid", 0) - d["p_yes"])
+            near.append((gap, d, r["title"]))
+    near.sort(key=lambda x: -x[0])
+    if near:
+        print("Closest to a trade (AI estimate vs price):")
+        for gap, d, title in near[:5]:
+            print(f"  {gap * 100:+5.1f} pts | AI {d['p_yes']:.2f} conf {d.get('conf')} | bid {d.get('bid')} ask {d.get('ask')}"
+                  f" | relevant={d.get('relevant', '?')} priced_in={d.get('priced_in')} | {title[:70]}")
+    m = db.money()
+    print(f"Equity ${m['equity']:.2f} | open positions {len(db.open_positions())}")
+    print("=======================\n")
+
+
 def cloud(db):
     """One pass on GitHub's servers. Paper only: GitHub's servers are in the US, where
     Polymarket trading isn't allowed, and a private key must never go on GitHub."""
@@ -45,6 +84,7 @@ def cloud(db):
     paused = os.getenv("POLYBOT_PAUSED", "").strip().lower()
     if paused in ("true", "false"):
         db.set("paused", paused == "true")
+    started = time.time()
     engine = Engine(db, Broker(db))
     engine.run_once()
     # Keep working for a while instead of one quick pass (GitHub only starts runs every
@@ -55,6 +95,10 @@ def cloud(db):
         time.sleep(15)
         engine.fast_tick()
         engine.slow_tick()
+    try:
+        run_summary(db, started)
+    except Exception as e:
+        print("summary failed:", e)
     from dashboard import export_static
     print("Dashboard written to", export_static(db))
     with db.lock:  # fold the write-ahead log into the main file before GitHub saves it
