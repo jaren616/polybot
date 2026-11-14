@@ -48,7 +48,7 @@ Run both test files before every push. Tests are offline (all network calls are 
   ~9% loss per trade, 23% win rate.
 - **Favourites OFF**: 91-93% win rate but negative return in backtest and live paper (needs > entry price to break even).
 - **On**: AI news (5-point edge, 55% confidence, 2-point edge at 90c+ with 80% confidence),
-  sports value (3-point edge vs bookmakers, needs ODDS_API_KEY), arbitrage + price-move alerts (alerts only).
+  sports value (2-point edge vs bookmakers, 8 leagues checked twice a day, needs ODDS_API_KEY), arbitrage + price-move alerts (alerts only).
 - Judge strategies by the dashboard's **By strategy** table and **Brier score vs market** after 50+ settled trades.
 
 - **News matching (14 Nov)**: one AI call per story with up to 12 keyword candidates (near-term markets

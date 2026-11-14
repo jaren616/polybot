@@ -146,13 +146,14 @@ MOVER_COOLDOWN_HOURS = 6    # don't re-alert the same market for this long
 # chance. When Polymarket sells an outcome cheaper than that, buy it.
 # Free key at the-odds-api.com: 500 credits a month. Each sport costs 1 credit per check.
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
-ODDS_SPORTS = ["soccer_epl", "soccer_uefa_champs_league", "basketball_nba",
+ODDS_SPORTS = ["soccer_epl", "soccer_uefa_champs_league", "soccer_spain_la_liga",
+               "soccer_italy_serie_a", "soccer_germany_bundesliga", "basketball_nba",
                "americanfootball_nfl", "icehockey_nhl"]
 ODDS_REGIONS = "eu"            # "eu" includes Pinnacle, the sharpest bookmaker
-ODDS_EVERY_MINUTES = int(os.getenv("POLYBOT_ODDS_EVERY", "480"))  # 5 sports x 3/day ~ 450 credits/month (free tier)
+ODDS_EVERY_MINUTES = int(os.getenv("POLYBOT_ODDS_EVERY", "720"))  # 8 sports x 2/day ~ 480 credits/month (free tier: 500)
 ODDS_MIN_REMAINING = 15        # stop fetching when the monthly credits get this low
 ODDS_MAX_AGE_MINUTES = 540     # don't trade on odds older than this
-SPORTS_MIN_EDGE = 0.03         # Polymarket must be 3+ points cheaper than the bookmakers
+SPORTS_MIN_EDGE = 0.02         # Polymarket must be 2+ points cheaper than the bookmakers (was 3: more trades)
 SPORTS_MIN_BOOKS = 3           # need at least this many bookmakers' prices
 SPORTS_MAX_GAP = 0.20          # bigger gap than this = probably matched the wrong game: skip
 SPORTS_MIN_MINUTES_BEFORE = 30 # only bet on games starting at least this far ahead
