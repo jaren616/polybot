@@ -35,12 +35,13 @@ ENABLE_NEWS = True     # AI news trading (trades, paper or live)
 ENABLE_ARB = True      # arbitrage scanner (alerts + gap tracking, never auto-traded)
 ENABLE_MOVERS = True   # price-move / volume-spike alerts (alerts only)
 ENABLE_SPORTS = True      # sports value: Polymarket vs bookmaker odds (needs ODDS_API_KEY)
+ENABLE_CRYPTO = True      # crypto value: price markets vs option maths (no key needed, see crypto.py)
 ENABLE_MOMENTUM = False   # OFF: backtest lost money on all 12 settings tried (Nov 2026)
 ENABLE_FAVOURITES = False # OFF: backtest showed no edge after the spread (Nov 2026)
 
 # The high-volume strategies are PAPER ONLY: live mode refuses them. They buy and sell
 # far more often, and their exits (selling early) aren't built for real orders.
-PAPER_ONLY_STRATEGIES = {"sports", "momentum", "favourites"}
+PAPER_ONLY_STRATEGIES = {"sports", "crypto", "momentum", "favourites"}
 
 # =====================================================================
 #  TIMING (seconds)
@@ -161,6 +162,23 @@ SPORTS_MIN_MINUTES_BEFORE = 30 # only bet on games starting at least this far ah
 SPORTS_STAKE = 5.0
 
 # =====================================================================
+#  CRYPTO VALUE (Polymarket crypto price markets vs option maths, see crypto.py)
+# =====================================================================
+# Backtest (21 days, 924 BTC/ETH markets): +24% per $ on weekdays, -13% at weekends, so weekdays only.
+CRYPTO_KINDS = {"above", "range"}   # "touch_up"/"touch_down" (reach/dip markets) not backtested yet: off
+CRYPTO_WEEKDAYS_ONLY = True     # no new crypto trades on Saturday/Sunday (UTC)
+CRYPTO_VOL_HOURS = 168          # volatility from the last 7 days of hourly prices
+CRYPTO_MIN_EDGE = 0.04          # fair chance must beat the price by 4+ points
+CRYPTO_MIN_PRICE = 0.10         # skip long shots / near-certainties: the maths is weakest in the tails
+CRYPTO_MAX_PRICE = 0.90
+CRYPTO_MIN_HOURS_LEFT = 3       # very short markets hinge on Binance-vs-Coinbase pennies: skip
+CRYPTO_MIN_LIQUIDITY = 1_000
+CRYPTO_TOUCH_BUFFER = 0.01      # treat "reach $K" as already decided if the high came within 1% of K
+CRYPTO_STAKE = 5.0
+CRYPTO_EVERY_MINUTES = 30       # re-price crypto markets this often
+CRYPTO_MAX_NEW_PER_SCAN = 5
+
+# =====================================================================
 #  MOMENTUM
 # =====================================================================
 FAST_MARKETS = 1000             # how many of the busiest markets to re-price every minute
@@ -200,7 +218,7 @@ MAX_STAKE = 10.0            # never more than this on one trade
 MAX_OPEN_POSITIONS = 200
 MAX_EXPOSURE = 900.0        # total money in open positions
 MAX_TRADES_PER_DAY = 200
-STRATEGY_MAX_OPEN = {"news": 100, "sports": 80, "momentum": 40, "favourites": 60}
+STRATEGY_MAX_OPEN = {"news": 100, "sports": 80, "crypto": 40, "momentum": 40, "favourites": 60}
 DAILY_LOSS_LIMIT = 100.0     # bot pauses itself if equity falls this much in a day (UTC)
 MIN_PRICE = 0.05            # never buy long shots below 5c
 MAX_PRICE = 0.99            # can buy favourites up to 99c (see HIGH_PRICE_ZONE above)

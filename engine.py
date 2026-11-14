@@ -16,6 +16,7 @@ class Engine:
         self.slow = strategies.SlowScan(db)
         self.sports = strategies.SportsStrategy(db, broker)
         self.fast = strategies.FastScan(db, broker)
+        self.crypto = strategies.CryptoStrategy(db, broker)
         self.stop = threading.Event()
         self.next_run = {}
 
@@ -57,6 +58,8 @@ class Engine:
             self._safe("arb/movers", self.slow.run)
             if config.ENABLE_SPORTS and self.slow.events:
                 self._safe("sports", lambda: self.sports.run(self.slow.events))
+        if config.ENABLE_CRYPTO and self._due("crypto", config.CRYPTO_EVERY_MINUTES * 60):
+            self._safe("crypto", self.crypto.run)
 
     def _loop(self, tick):
         while not self.stop.is_set():

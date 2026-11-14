@@ -568,4 +568,60 @@ run_mod.time.sleep = real_sleep
 check(ticks[0] == "once" and "fast" in ticks and "slow" in ticks, "loop mode keeps running the strategies")
 os.chdir(cwd0)
 
+# ---------------- Crypto value ----------------
+import crypto
+def cm(id, q, bid, ask, end_ts, title=None, liq=5000):
+    return {"id": id, "question": q, "groupItemTitle": title, "outcomes": json.dumps(["Yes", "No"]),
+            "outcomePrices": json.dumps([str((bid + ask) / 2), str(1 - (bid + ask) / 2)]), "bestBid": bid, "bestAsk": ask,
+            "endDate": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(end_ts)), "liquidityNum": liq,
+            "slug": f"c{id}", "clobTokenIds": json.dumps([f"y{id}", f"n{id}"])}
+pm = data.parse_market
+t_end = time.time() + 2 * 86400
+spec = crypto.classify("Bitcoin above ___ on November 15?", pm(cm(1, "Will the price of Bitcoin be above $66,000 on November 15?", .5, .51, t_end, "66,000")))
+check(spec == {"coin": "BTC", "kind": "above", "k": 66000.0}, f"crypto: 'above' market read {spec}")
+spec = crypto.classify("Bitcoin price on November 15?", pm(cm(2, "Will the price of Bitcoin be between $66,000 and $68,000 on November 15?", .5, .51, t_end)))
+check(spec["kind"] == "range" and spec["lo"] == 66000 and spec["hi"] == 68000, "crypto: range market read")
+spec = crypto.classify("Bitcoin price on November 15?", pm(cm(3, "Will the price of Bitcoin be less than $66,000 on November 15?", .1, .11, t_end)))
+check(spec["kind"] == "range" and spec["lo"] == 0 and spec["hi"] == 66000, "crypto: 'less than' bucket read")
+spec = crypto.classify("What price will Ethereum hit in November?", pm(cm(4, "Will Ethereum dip to $1,800 in November?", .5, .51, t_end, "↓ 1,800")))
+check(spec == {"coin": "ETH", "kind": "touch_down", "k": 1800.0}, f"crypto: dip market read {spec}")
+check(crypto.classify("Bitcoin Up or Down on November 14?", pm(cm(5, "Bitcoin Up or Down on November 14?", .5, .51, t_end))) is None,
+      "crypto: up-or-down markets skipped")
+check(crypto.classify("Who will win the election?", pm(cm(6, "Will Ann win?", .5, .51, t_end))) is None, "crypto: non-crypto ignored")
+check(abs(crypto.p_above(100, 100, 0.5, 1 / 365) - 0.5) < 0.01, "crypto maths: at-the-money ~50%")
+check(crypto.p_above(100, 90, 0.5, 1 / 365) > 0.99 and crypto.p_above(100, 110, 0.5, 1 / 365) < 0.01, "crypto maths: far strikes")
+pt, pa = crypto.p_touch(100, 102, 0.42, 1 / 365), crypto.p_above(100, 102, 0.42, 1 / 365)
+check(1.8 < pt / pa < 2.1, "crypto maths: touching ~2x finishing above")
+check(crypto.fair({"kind": "touch_up", "k": 110}, 100, 0.5, 0.1, hi=111, lo=95) is None, "crypto: already-hit level skipped")
+check(crypto.period_start("What price will Bitcoin hit in November?", data.parse_ts("2026-12-01T05:00:00Z"))
+      == data.parse_ts("2026-11-01T05:00:00Z"), "crypto: November period starts midnight ET")
+check(crypto.period_start("What price will Bitcoin hit November 9-15?", data.parse_ts("2026-11-16T05:00:00Z"))
+      == data.parse_ts("2026-11-09T05:00:00Z"), "crypto: week period start")
+class FakeFeed:
+    def spot(self, sym): return 66000.0
+    def vol(self, sym): return 0.40
+    def extremes(self, sym, start): return (70000.0, 60000.0)
+now_c = data.parse_ts("2026-11-16T12:00:00Z")   # a Monday
+end_c = now_c + 86400
+cev = [{"title": "Bitcoin above ___ on November 17?", "markets": [
+    cm(10, "Will the price of Bitcoin be above $66,000 on November 17?", 0.30, 0.31, end_c, "66,000"),      # fair ~50%: cheap YES
+    cm(11, "Will the price of Bitcoin be above $80,000 on November 17?", 0.0, 0.01, end_c, "80,000"),       # ~0%: priced right
+    cm(12, "Will the price of Bitcoin be above $64,000 on November 17?", 0.60, 0.62, now_c + 3600, "64,000")]}]  # 1h left: skip
+opps = crypto.find_opportunities(cev, FakeFeed(), now_c)
+check([(o["market"].id, o["side"]) for o in opps] == [("10", "YES")] and 0.15 < opps[0]["edge"] < 0.25,
+      f"crypto: cheap market found, fair-priced and too-short ones skipped {[(o['market'].id, o['side']) for o in opps]}")
+dbc = DB(":memory:")
+cs = strategies.CryptoStrategy(dbc, Broker(dbc))
+check(cs.run(cev, FakeFeed(), now_c - 2 * 86400) == 0 and not dbc.open_positions(), "crypto: no trades at weekends")
+check(cs.run(cev, FakeFeed(), now_c) == 1, "crypto: weekday paper trade placed")
+pos = dbc.open_positions()[0]
+check(pos["strategy"] == "crypto" and pos["side"] == "YES" and abs(pos["cost"] - 5.0) < 0.05, "crypto: $5 YES position")
+check(cs.run(cev, FakeFeed(), now_c) == 0, "crypto: doesn't buy the same market twice")
+live_b = Broker(dbc)
+live_b.live = object()
+check(live_b.buy(pm(cev[0]["markets"][0]), "YES", 0.5, "crypto") is None, "crypto is paper-only")
+# sports stores the YES chance, so the Brier score is right for NO bets too
+nb = [p for p in dbs.open_positions() if p["side"] == "NO"][0]
+check(nb["est_prob"] < 0.5, f"sports NO bet stores the YES chance ({nb['est_prob']})")
+
 print(f"\n{ok} checks passed.\nALL TESTS PASSED")

@@ -162,7 +162,7 @@ a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
 .tag{font-size:11px;font-weight:650;padding:1px 7px;border-radius:6px;white-space:nowrap}
 .t-news{background:var(--newsbg);color:var(--news)}.t-arb{background:var(--arbbg);color:var(--arb)}
 .t-mover{background:var(--warnbg);color:var(--warn)}
-.t-sports{background:var(--goodbg);color:var(--good)}.t-momentum{background:var(--accbg);color:var(--acc)}
+.t-sports{background:var(--goodbg);color:var(--good)}.t-crypto{background:var(--warnbg);color:var(--warn)}.t-momentum{background:var(--accbg);color:var(--acc)}
 .t-favourite,.t-favourites{background:var(--soft);color:var(--ink)}.t-YES{background:var(--goodbg);color:var(--good)}
 .t-NO{background:var(--badbg);color:var(--bad)}
 .chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
@@ -229,7 +229,7 @@ function render(){
   ["Brier (you vs mkt)",br,""],
  ].map(([k,v,c])=>`<div class="kpi"><span>${k}</span><b class="${c}">${v}</b></div>`).join("");
  $("btlink").style.display=S.backtest?"":"none";
- const SN={news:"AI news",sports:"Sports value",momentum:"Momentum",favourites:"Favourites"};
+ const SN={news:"AI news",sports:"Sports value",crypto:"Crypto value",momentum:"Momentum",favourites:"Favourites"};
  const bs=S.by_strategy||[];
  $("strat").innerHTML=bs.length?`<table><tr><th>Strategy</th><th class="r">Open</th><th class="r">Closed</th><th class="r">Win rate</th><th class="r">Staked</th><th class="r">Realised</th><th class="r">Unrealised</th><th class="r">Total</th></tr>`+
   bs.map(r=>{const t=r.realized+r.unrealized;return`<tr><td><span class="tag t-${r.strategy}">${esc(SN[r.strategy]||r.strategy)}</span></td><td class="r">${r.open}</td><td class="r">${r.closed}</td><td class="r">${r.closed?Math.round(100*r.wins/r.closed)+"%":"–"}</td><td class="r">$${r.staked.toFixed(0)}</td><td class="r ${cls(r.realized)}">${usd(r.realized,1)}</td><td class="r ${cls(r.unrealized)}">${usd(r.unrealized,1)}</td><td class="r ${cls(t)}"><b>${usd(t,1)}</b></td></tr>`}).join("")+"</table>"
@@ -249,13 +249,14 @@ function render(){
  $("arbs").innerHTML=S.arbs.length?`<table><tr><th>Seen</th><th>Type</th><th>Market</th><th class="r">Gap</th><th class="r">Max $</th><th class="r">Per year</th><th>Status</th></tr>`+
   S.arbs.slice(0,40).map(a=>`<tr><td class="small muted">${tm(a.first_seen)}</td><td><span class="tag t-arb">${esc(a.type)}</span></td><td class="q"><a href="${esc(a.url)}" target="_blank">${esc(a.event)}</a></td><td class="r">${(a.best_profit*100).toFixed(1)}c</td><td class="r">$${(a.best_profit*(a.last_size||0)).toFixed(2)}</td><td class="r ${a.apr<.05?"neg":"pos"}">${Math.round(a.apr*100)}%</td><td class="small">${a.open?"open":Math.round((a.last_seen-a.first_seen)/60)+" min"}</td></tr>`).join("")+"</table>"
   :`<div class="empty">No gaps found yet.</div>`;
- const kinds=[["all","All"],["news","News"],["sports","Sports"],["momentum","Momentum"],["favourite","Favourites"],["arb","Arbitrage"],["mover","Price moves"]];
+ const kinds=[["all","All"],["news","News"],["sports","Sports"],["crypto","Crypto"],["momentum","Momentum"],["favourite","Favourites"],["arb","Arbitrage"],["mover","Price moves"]];
  $("chips").innerHTML=kinds.map(([k,l])=>`<span class="chip ${filter===k?"on":""}" data-k="${k}">${l}${k!=="all"&&st.signals[k]?" "+st.signals[k]:""}</span>`).join("");
  document.querySelectorAll(".chip").forEach(c=>c.onclick=()=>{filter=c.dataset.k;render()});
  const sg=S.signals.filter(s=>filter==="all"||s.kind===filter).slice(0,60);
  $("sigs").innerHTML=sg.length?sg.map(s=>{const d=s.data||{};let extra="";
   if(s.kind==="news")extra=`${esc(d.source)} · ${d.age_min}m old · market ${d.yes}`+(d.p_yes!=null?` · AI says ${d.p_yes} (conf ${d.conf})`:"")+(d.reason?`<br><i>${esc(d.reason)}</i>`:"");
   if(s.kind==="sports")extra=`${esc(d.sport||"")} · ${d.books} bookmakers`;
+  if(s.kind==="crypto")extra=`${esc(d.coin||"")} ${esc(d.kind||"")} · fair ${d.fair} vs ${d.price}`;
   if(s.kind==="arb")extra=`${d.profit_c}c per set · up to $${d.max_usd} · ${d.days} days · ${Math.round(d.apr*100)}%/yr`;
   return`<div class="sig"><div class="top"><span class="tag t-${s.kind}">${s.kind}</span><a class="t" href="${esc(s.url)}" target="_blank">${esc(s.title)}</a><span class="sp"></span><span class="small muted">${ago(s.ts)}</span></div>
   <div class="d small">${esc(s.detail)}</div>${extra?`<div class="small muted">${extra}</div>`:""}<div class="a ${String(s.action).includes("buy")?"act-buy":"muted"}">${esc(s.action||"")}</div></div>`}).join("")

@@ -25,10 +25,11 @@ Never print, log or commit a key. `.gitignore` already excludes databases and ca
 |---|---|
 | `run.py` | Entry point: `run` (laptop + local dashboard), `once`, `cloud`, `reset`, `resume` |
 | `config.py` | Every setting and strategy on/off switch |
-| `engine.py` | Runs strategies on timers (fast tick: news/marks/settle; slow tick: arb, movers, sports) |
+| `engine.py` | Runs strategies on timers (fast tick: news/marks/settle; slow tick: arb, movers, sports, crypto) |
 | `strategies.py` | NewsStrategy, SlowScan (arb + movers), SportsStrategy, FastScan (momentum + favourites), mark/settle/exits |
 | `ai.py` | Judges news with Gemini / Groq / OpenRouter / Ollama / Claude, with automatic fallback + daily cap |
 | `sports.py` | Bookmaker odds (The Odds API), de-vig, Pinnacle-preferred fair prices, team matching |
+| `crypto.py` | Crypto price markets priced with option maths (Coinbase price + 7-day volatility); `crypto_backtest.py` checks it |
 | `broker.py` | Kelly sizing, risk checks, paper fills; live trading via py-clob-client (laptop only, locked) |
 | `data.py`, `news_feeds.py`, `matcher.py`, `arb_core.py` | Polymarket API, 33 RSS feeds, keyword matching, arbitrage maths |
 | `db.py`, `dashboard.py` | SQLite storage; local dashboard server + static export for Pages |
@@ -36,7 +37,7 @@ Never print, log or commit a key. `.gitignore` already excludes databases and ca
 
 ## Commands
 ```
-python test_all.py        # 95 offline checks, must end ALL TESTS PASSED
+python test_all.py        # 129 offline checks, must end ALL TESTS PASSED
 python test_backtest.py   # 26 checks, must end ALL BACKTEST TESTS PASSED
 python run.py once        # one pass of everything (needs internet)
 python backtest.py --sweep
@@ -49,6 +50,10 @@ Run both test files before every push. Tests are offline (all network calls are 
 - **Favourites OFF**: 91-93% win rate but negative return in backtest and live paper (needs > entry price to break even).
 - **On**: AI news (5-point edge, 55% confidence, 2-point edge at 90c+ with 80% confidence),
   sports value (2-point edge vs bookmakers, 8 leagues checked twice a day, needs ODDS_API_KEY), arbitrage + price-move alerts (alerts only).
+- **Crypto value ON, weekdays only (14 Nov)**: `crypto_backtest.py` (21 days, 924 BTC/ETH above/range markets):
+  model Brier 0.127 vs market 0.130, +17% per $ over 239 trades with 7-day realised vol (beat Deribit DVOL);
+  weekdays +24%, weekends -13%, first half of the period only break-even. "Reach/dip" markets off (not backtested).
+  Re-run the backtest after a few weeks; turn it off if live paper results disagree.
 - Judge strategies by the dashboard's **By strategy** table and **Brier score vs market** after 50+ settled trades.
 
 - **News matching (14 Nov)**: one AI call per story with up to 12 keyword candidates (near-term markets
@@ -57,7 +62,9 @@ Run both test files before every push. Tests are offline (all network calls are 
 
 ## Open items (Nov 2026)
 - Watch the RUN SUMMARY: how many stories get a market picked, and whether any reach the 5-point edge.
-- `ODDS_API_KEY` not added yet, so sports value is idle.
+- Sports: first 4 paper bets 14 Nov. Sports positions opened before 14 Nov ~10:30 UTC stored the bought side's
+  chance as est_prob (now the YES chance), so their Brier scores are off.
+- Crypto: watch the first weekday trades (from Mon 16 Nov).
 - GitHub starts the 30-minute schedule late (runs roughly hourly).
 
 ## Also on the owner's laptop

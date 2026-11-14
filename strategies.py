@@ -4,6 +4,7 @@ import time
 import ai
 import arb_core
 import config
+import crypto
 import data
 import news_feeds
 import sports
@@ -234,9 +235,44 @@ class SportsStrategy:
                 f"for {lbl} ({o['edge'] * 100:.1f} points cheap, {o['books']} books)", m.id, m.url,
                 {"fair": round(o["fair"], 3), "price": o["price"], "edge": round(o["edge"], 3),
                  "sport": o["sport"], "books": o["books"]})
-            if self.broker.buy(m, o["side"], o["fair"], "sports", signal_id=sid, stake=config.SPORTS_STAKE):
+            p_yes = o["fair"] if o["side"] == "YES" else 1 - o["fair"]   # stored as the YES chance (Brier score)
+            if self.broker.buy(m, o["side"], p_yes, "sports", signal_id=sid, stake=config.SPORTS_STAKE):
                 n += 1
         self.db.set("last_sports", now)
+        return n
+
+
+# =====================================================================
+#  4b. CRYPTO VALUE (Polymarket crypto price markets vs option maths)
+# =====================================================================
+class CryptoStrategy:
+    def __init__(self, db, broker):
+        self.db, self.broker = db, broker
+
+    def run(self, events=None, feed=None, now=None):
+        now = now or time.time()
+        if config.CRYPTO_WEEKDAYS_ONLY and time.gmtime(now).tm_wday >= 5:
+            self.db.set("last_crypto", now)
+            return 0   # backtest: weekend trades lost money
+        events = crypto.load_events() if events is None else events
+        feed = feed or crypto.Feed(now)
+        n = 0
+        for o in crypto.find_opportunities(events, feed, now):
+            if n >= config.CRYPTO_MAX_NEW_PER_SCAN:
+                break
+            m = o["market"]
+            if self.db.has_open(m.id):
+                continue
+            lbl = m.label(o["side"])
+            sid = self.db.add_signal(
+                "crypto", m.question, f"{o['coin']} ${o['spot']:,.{0 if o['spot'] >= 100 else 4}f}, vol {o['vol']:.0%}: fair {o['fair']:.0%} "
+                f"vs Polymarket {o['price']:.0%} for {lbl} ({o['edge'] * 100:.1f} points cheap)", m.id, m.url,
+                {"fair": round(o["fair"], 3), "price": o["price"], "edge": round(o["edge"], 3), "coin": o["coin"],
+                 "kind": o["kind"], "spot": o["spot"], "vol": round(o["vol"], 3)})
+            p_yes = o["fair"] if o["side"] == "YES" else 1 - o["fair"]
+            if self.broker.buy(m, o["side"], p_yes, "crypto", signal_id=sid, stake=config.CRYPTO_STAKE):
+                n += 1
+        self.db.set("last_crypto", now)
         return n
 
 
